@@ -8,7 +8,6 @@ A high-performance mathematical expression evaluator with JIT compilation and au
 - 📊 Automatic differentiation (up to any order)
 - 🔢 Support for multiple variables
 - 🧮 Higher-order partial derivatives
-- 💪 Type-safe and memory-safe Rust implementation
 
 > This crate is still under development and the API is subject to change. Not all mathematical operations are supported yet.
 
