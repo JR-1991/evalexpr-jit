@@ -17,27 +17,28 @@ use isa::TargetIsa;
 ///
 /// # Arguments
 /// * `expr` - The expression tree to compile
-/// * `is_x86` - Whether to target x86 architecture specifically
 ///
 /// # Returns
 /// A function pointer that takes a pointer to an array of f64 values and returns an f64
-pub fn build_function(expr: Expr, is_x86: bool) -> Result<fn(*const f64) -> f64, BuilderError> {
-    let isa = create_isa(is_x86)?;
+pub fn build_function(expr: Expr) -> Result<fn(*const f64) -> f64, BuilderError> {
+    let isa = create_isa()?;
     let (mut module, mut ctx) = create_module_and_context(isa);
     build_function_body(&mut ctx, expr);
     compile_and_finalize(&mut module, &mut ctx)
 }
 
 /// Creates an Instruction Set Architecture (ISA) target for code generation.
-///
-/// # Arguments
-/// * `is_x86` - If true, enables x86-specific optimizations and PIC code generation
-///
-/// # Returns
-/// The target ISA wrapped in an Arc pointer
-fn create_isa(is_x86: bool) -> Result<Arc<dyn TargetIsa>, BuilderError> {
+fn create_isa() -> Result<Arc<dyn TargetIsa>, BuilderError> {
     let mut flag_builder = settings::builder();
 
+    // Get target triple to detect architecture
+    let target_triple = target_lexicon::Triple::host();
+    let is_x86 = matches!(
+        target_triple.architecture,
+        target_lexicon::Architecture::X86_64
+    );
+
+    // Set flags based on architecture
     if is_x86 {
         flag_builder.set("use_colocated_libcalls", "true").unwrap();
         flag_builder.set("is_pic", "true").unwrap();

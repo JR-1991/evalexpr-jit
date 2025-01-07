@@ -17,7 +17,7 @@
 //! use evalexpr_jit::Equation;
 //!
 //! // Create and compile an equation
-//! let eq = Equation::new("2*x + y^2".to_string(), false).unwrap();
+//! let eq = Equation::new("2*x + y^2".to_string()).unwrap();
 //!
 //! // Evaluate at point (x=1, y=2)
 //! let result = eq.eval(&[1.0, 2.0]); // Returns 6.0

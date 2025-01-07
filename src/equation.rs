@@ -16,7 +16,7 @@
 //! ```
 //! use evalexpr_jit::Equation;
 //!
-//! let eq = Equation::new("2*x + y^2".to_string(), false).unwrap();
+//! let eq = Equation::new("2*x + y^2".to_string()).unwrap();
 //! let result = eq.eval(&[1.0, 2.0]); // Evaluates to 6.0
 //! let gradient = eq.gradient(&[1.0, 2.0]); // Computes [2.0, 4.0]
 //! ```
@@ -55,7 +55,6 @@ impl Equation {
     ///
     /// # Arguments
     /// * `equation_str` - The equation as a string (e.g. "2*x + y^2")
-    /// * `is_x86` - Whether to optimize for x86 architecture
     ///
     /// # Returns
     /// * `Result<Self, EquationError>` - The compiled equation or an error
@@ -63,9 +62,9 @@ impl Equation {
     /// # Example
     /// ```
     /// # use evalexpr_jit::Equation;
-    /// let eq = Equation::new("2*x + y^2".to_string(), false).unwrap();
+    /// let eq = Equation::new("2*x + y^2".to_string()).unwrap();
     /// ```
-    pub fn new(equation_str: String, is_x86: bool) -> Result<Self, EquationError> {
+    pub fn new(equation_str: String) -> Result<Self, EquationError> {
         let node = build_operator_tree(&equation_str)?;
         let variables = extract_variables(&node);
         let ast = build_ast(&node, &variables)?;
@@ -73,13 +72,13 @@ impl Equation {
         sorted_variables.sort();
 
         // Compile the equation
-        let fun = build_function(ast.clone(), is_x86)?;
+        let fun = build_function(ast.clone())?;
 
         // Derive the first order partial derivatives
         let mut derivatives_first_order = HashMap::new();
         for variable in sorted_variables.iter() {
             let derivative = ast.derivative(variable);
-            let derivative_func = build_function(*derivative.clone(), is_x86)?;
+            let derivative_func = build_function(*derivative)?;
             derivatives_first_order.insert(variable.clone(), derivative_func);
         }
 
@@ -89,7 +88,7 @@ impl Equation {
             let mut derivatives_second_order_row = Vec::new();
             for variable2 in sorted_variables.iter() {
                 let derivative = ast.derivative(variable).derivative(variable2);
-                let derivative_func = build_function(*derivative.clone(), is_x86)?;
+                let derivative_func = build_function(*derivative)?;
                 derivatives_second_order_row.push(derivative_func);
             }
             derivatives_second_order.push(derivatives_second_order_row);
@@ -117,7 +116,7 @@ impl Equation {
     /// # Example
     /// ```
     /// # use evalexpr_jit::Equation;
-    /// let eq = Equation::new("2*x + y^2".to_string(), false).unwrap();
+    /// let eq = Equation::new("2*x + y^2".to_string()).unwrap();
     /// let result = eq.eval(&[1.0, 2.0]); // x = 1, y = 2
     /// assert_eq!(result, 6.0); // 2*1 + 2^2 = 6
     /// ```
@@ -136,7 +135,7 @@ impl Equation {
     /// # Example
     /// ```
     /// # use evalexpr_jit::Equation;
-    /// let eq = Equation::new("2*x + y^2".to_string(), false).unwrap();
+    /// let eq = Equation::new("2*x + y^2".to_string()).unwrap();
     /// let gradient = eq.gradient(&[1.0, 2.0]); // at point (1,2)
     /// assert_eq!(gradient, vec![2.0, 4.0]); // [∂/∂x, ∂/∂y] = [2, 2y]
     /// ```
@@ -158,7 +157,7 @@ impl Equation {
     /// # Example
     /// ```
     /// # use evalexpr_jit::Equation;
-    /// let eq = Equation::new("2*x + y^2".to_string(), false).unwrap();
+    /// let eq = Equation::new("2*x + y^2".to_string()).unwrap();
     /// let hessian = eq.hessian(&[1.0, 2.0]); // at point (1,2)
     /// assert_eq!(hessian, vec![vec![0.0, 0.0], vec![0.0, 2.0]]);
     /// ```
@@ -180,7 +179,7 @@ impl Equation {
     /// # Example
     /// ```
     /// # use evalexpr_jit::Equation;
-    /// let eq = Equation::new("2*x + y^2".to_string(), false).unwrap();
+    /// let eq = Equation::new("2*x + y^2".to_string()).unwrap();
     /// let dx = eq.derivative("x").unwrap();
     /// let values = vec![1.0, 2.0];
     /// let result = dx(values.as_ptr()); // evaluate ∂/∂x at (1,2)
@@ -203,7 +202,7 @@ impl Equation {
     /// # Example
     /// ```
     /// # use evalexpr_jit::Equation;
-    /// let eq = Equation::new("x^2 * y^2".to_string(), false).unwrap();
+    /// let eq = Equation::new("x^2 * y^2".to_string()).unwrap();
     /// let dxdy = eq.derive_wrt(&["x", "y"]).unwrap();
     /// let values = vec![2.0, 3.0];
     /// let result = dxdy(values.as_ptr()); // evaluate ∂²/∂x∂y at (2,3)
@@ -214,7 +213,7 @@ impl Equation {
         for variable in variables {
             expr = expr.derivative(variable);
         }
-        let fun = build_function(*expr, false)?;
+        let fun = build_function(*expr)?;
         Ok(fun)
     }
 
