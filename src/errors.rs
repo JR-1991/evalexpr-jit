@@ -82,4 +82,10 @@ pub enum EquationError {
     /// Error when trying to get derivative for a variable that doesn't exist
     #[error("Derivative not found for variable: {0}")]
     DerivativeNotFound(String),
+    /// Error when the input length is not the same as the number of variables
+    #[error("Invalid input length: expected {expected}, got {got}")]
+    InvalidInputLength { expected: usize, got: usize },
+    /// Error when a variable is not found in the equation
+    #[error("Variable not found in equation: {0}")]
+    VariableNotFound(String),
 }
