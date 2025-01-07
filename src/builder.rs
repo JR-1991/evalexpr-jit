@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use crate::{
+    equation::JITFunction,
     errors::BuilderError,
     expr::{Expr, VarRef},
 };
@@ -19,12 +20,19 @@ use isa::TargetIsa;
 /// * `expr` - The expression tree to compile
 ///
 /// # Returns
-/// A function pointer that takes a pointer to an array of f64 values and returns an f64
-pub fn build_function(expr: Expr) -> Result<fn(*const f64) -> f64, BuilderError> {
+/// A wrapped function that safely takes a slice of f64 values and returns an f64
+pub fn build_function(expr: Expr) -> Result<JITFunction, BuilderError> {
     let isa = create_isa()?;
     let (mut module, mut ctx) = create_module_and_context(isa);
     build_function_body(&mut ctx, expr);
-    compile_and_finalize(&mut module, &mut ctx)
+    let raw_fn = compile_and_finalize(&mut module, &mut ctx)?;
+
+    // Wrap the unsafe function in a safe interface
+    Ok(Box::new(move |input: &[f64]| {
+        // The raw pointer is only used within this scope and we ensure
+        // it's valid because it comes from a slice reference
+        raw_fn(input.as_ptr())
+    }))
 }
 
 /// Creates an Instruction Set Architecture (ISA) target for code generation.
