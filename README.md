@@ -69,9 +69,10 @@ let hessian = eq.hessian(&[2.0, 3.0]);
 The main struct representing a mathematical equation. Key methods include:
 
 - `new(equation_str: String) -> Result<Self, EquationError>`
-- `eval(&self, values: &[f64]) -> f64`
-- `gradient(&self, values: &[f64]) -> Vec<f64>`
-- `hessian(&self, values: &[f64]) -> Vec<Vec<f64>>`
+- `from_var_map(equation_str: String, variables: HashMap<String, u32>) -> Result<Self, EquationError>`
+- `eval(&self, values: &[f64]) -> Result<f64, EquationError>`
+- `gradient(&self, values: &[f64]) -> Result<Vec<f64>, EquationError>`
+- `hessian(&self, values: &[f64]) -> Result<Vec<Vec<f64>>, EquationError>`
 - `derivative(&self, variable: &str) -> Result<&JITFunction, EquationError>`
 - `derive_wrt(&self, variables: &[&str]) -> Result<JITFunction, EquationError>`
 
