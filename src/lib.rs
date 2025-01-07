@@ -1,16 +1,30 @@
-//! A library for JIT compilation and symbolic differentiation of mathematical expressions.
+//! JIT-compiled mathematical expression evaluator with automatic differentiation.
 //!
-//! This crate provides functionality to:
-//! - Parse mathematical expressions from strings
-//! - Convert them into an internal AST representation
-//! - JIT compile expressions into native machine code for fast evaluation
-//! - Compute symbolic derivatives of expressions
+//! This crate provides JIT compilation and automatic differentiation for mathematical expressions.
+//! It builds on top of the [evalexpr](https://github.com/ISibboI/evalexpr) crate for parsing and
+//! uses [Cranelift](https://github.com/bytecodealliance/wasmtime/tree/main/cranelift) for JIT compilation.
 //!
-//! The main components are:
-//! - `Equation` - High-level interface for working with mathematical equations
-//! - `Expr` - AST representation of mathematical expressions
-//! - `build_ast` - Converts parsed expressions into our AST format
-//! - `build_function` - JIT compiles expressions into native code
+//! # Features
+//!
+//! - JIT compilation for fast expression evaluation
+//! - Automatic differentiation up to second order
+//! - Support for multiple variables
+//! - Type-safe Rust implementation
+//!
+//! # Example
+//!
+//! ```rust
+//! use evalexpr_jit::Equation;
+//!
+//! // Create and compile an equation
+//! let eq = Equation::new("2*x + y^2".to_string(), false).unwrap();
+//!
+//! // Evaluate at point (x=1, y=2)
+//! let result = eq.eval(&[1.0, 2.0]); // Returns 6.0
+//!
+//! // Compute gradient [∂/∂x, ∂/∂y]
+//! let gradient = eq.gradient(&[1.0, 2.0]); // Returns [2.0, 4.0]
+//! ```
 
 pub use equation::Equation;
 

@@ -1,3 +1,26 @@
+//! Mathematical equation evaluation and differentiation with JIT compilation.
+//!
+//! This module provides the core `Equation` type which represents a mathematical expression
+//! that can be evaluated and differentiated. Equations are JIT-compiled on creation for
+//! efficient evaluation and support automatic differentiation up to second order.
+//!
+//! # Features
+//!
+//! - JIT compilation of expressions using Cranelift
+//! - Automatic differentiation up to second order derivatives
+//! - Support for multiple variables
+//! - Efficient evaluation using compiled native code
+//!
+//! # Example
+//!
+//! ```
+//! use evalexpr_jit::Equation;
+//!
+//! let eq = Equation::new("2*x + y^2".to_string(), false).unwrap();
+//! let result = eq.eval(&[1.0, 2.0]); // Evaluates to 6.0
+//! let gradient = eq.gradient(&[1.0, 2.0]); // Computes [2.0, 4.0]
+//! ```
+
 use std::collections::{HashMap, HashSet};
 
 use evalexpr::{build_operator_tree, Node, Operator};

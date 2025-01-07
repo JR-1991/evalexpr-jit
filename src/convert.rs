@@ -1,3 +1,12 @@
+//! Conversion module for transforming evalexpr AST nodes into our internal expression representation.
+//!
+//! This module handles converting the AST nodes from the evalexpr crate into our own
+//! expression types that support JIT compilation and automatic differentiation. It maps
+//! variables, operators, and function calls into our internal representation.
+//!
+//! The main entry point is the `build_ast` function which recursively traverses the
+//! evalexpr AST and builds up our expression tree.
+
 use std::collections::HashMap;
 
 use crate::{

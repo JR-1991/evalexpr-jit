@@ -1,3 +1,22 @@
+//! Expression module for representing mathematical expressions.
+//!
+//! This module defines the core expression types used to represent mathematical expressions
+//! in a form that supports both JIT compilation and automatic differentiation. The main types are:
+//!
+//! - `Expr`: An enum representing different kinds of mathematical expressions
+//! - `VarRef`: A struct containing metadata about variables in expressions
+//!
+//! The expression tree is built recursively using `Box<Expr>` for nested expressions and can be:
+//! - JIT compiled into machine code using Cranelift
+//! - Symbolically differentiated to compute derivatives
+//! - Evaluated efficiently at runtime
+//!
+//! Supported operations include:
+//! - Basic arithmetic (+, -, *, /)
+//! - Variables and constants
+//! - Absolute value
+//! - Integer exponentiation
+
 use cranelift::prelude::*;
 use cranelift_codegen::ir::{immediates::Offset32, Value};
 

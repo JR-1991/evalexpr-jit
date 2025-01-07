@@ -1,3 +1,14 @@
+//! Error types for the evalexpr-jit crate.
+//!
+//! This module defines the various error types that can occur during expression parsing,
+//! AST conversion, and JIT compilation. The main error types are:
+//!
+//! - `ConvertError`: Errors during conversion from evalexpr AST to internal representation
+//! - `BuilderError`: Errors during JIT compilation with Cranelift
+//! - `EquationError`: High-level errors when working with equations
+//!
+//! Each error type implements the standard Error trait and provides detailed error messages.
+
 use cranelift_codegen::CodegenError;
 use cranelift_module::ModuleError;
 use evalexpr::{DefaultNumericTypes, EvalexprError};
