@@ -26,7 +26,7 @@ use cranelift_codegen::ir::{immediates::Offset32, Value};
 /// - The variable's name as a string
 /// - A Cranelift Value representing the pointer to the input array
 /// - The variable's index in the input array
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VarRef {
     pub name: String,
     pub vec_ref: Value,
@@ -40,7 +40,7 @@ pub struct VarRef {
 /// - Symbolically differentiated to compute derivatives
 ///
 /// The expression tree is built recursively using Box<Expr> for nested expressions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     /// A constant floating point value
     Const(f64),
@@ -212,5 +212,191 @@ impl Expr {
                 ))
             }
         }
+    }
+
+    /// Simplifies the expression by folding constants and applying basic algebraic rules
+    pub fn simplify(&self) -> Box<Expr> {
+        match self {
+            // Base cases - constants and variables remain unchanged
+            Expr::Const(_) | Expr::Var(_) => Box::new(self.clone()),
+
+            Expr::Add(left, right) => {
+                let l = left.simplify();
+                let r = right.simplify();
+                match (&*l, &*r) {
+                    // Fold constants: 1 + 2 -> 3
+                    (Expr::Const(a), Expr::Const(b)) => Box::new(Expr::Const(a + b)),
+                    // Identity: x + 0 -> x
+                    (expr, Expr::Const(0.0)) | (Expr::Const(0.0), expr) => Box::new(expr.clone()),
+                    // Combine like terms: c1*x + c2*x -> (c1+c2)*x
+                    (Expr::Mul(a1, x1), Expr::Mul(a2, x2)) if x1 == x2 => Box::new(Expr::Mul(
+                        Expr::Add(a1.clone(), a2.clone()).simplify(),
+                        x1.clone(),
+                    )),
+                    _ => Box::new(Expr::Add(l, r)),
+                }
+            }
+
+            Expr::Sub(left, right) => {
+                let l = left.simplify();
+                let r = right.simplify();
+                match (&*l, &*r) {
+                    // Fold constants: 3 - 2 -> 1
+                    (Expr::Const(a), Expr::Const(b)) => Box::new(Expr::Const(a - b)),
+                    // Identity: x - 0 -> x
+                    (expr, Expr::Const(0.0)) => Box::new(expr.clone()),
+                    // Zero: x - x -> 0
+                    (a, b) if a == b => Box::new(Expr::Const(0.0)),
+                    // Combine like terms: c1*x - c2*x -> (c1-c2)*x
+                    (Expr::Mul(a1, x1), Expr::Mul(a2, x2)) if x1 == x2 => Box::new(Expr::Mul(
+                        Expr::Sub(a1.clone(), a2.clone()).simplify(),
+                        x1.clone(),
+                    )),
+                    _ => Box::new(Expr::Sub(l, r)),
+                }
+            }
+
+            Expr::Mul(left, right) => {
+                let l = left.simplify();
+                let r = right.simplify();
+                match (&*l, &*r) {
+                    // Fold constants: 2 * 3 -> 6
+                    (Expr::Const(a), Expr::Const(b)) => Box::new(Expr::Const(a * b)),
+                    // Zero property: x * 0 -> 0
+                    (Expr::Const(0.0), _) | (_, Expr::Const(0.0)) => Box::new(Expr::Const(0.0)),
+                    // Identity: x * 1 -> x
+                    (expr, Expr::Const(1.0)) | (Expr::Const(1.0), expr) => Box::new(expr.clone()),
+                    // Combine exponents: x^a * x^b -> x^(a+b)
+                    (Expr::Exp(b1, e1), Expr::Exp(b2, e2)) if b1 == b2 => {
+                        Box::new(Expr::Exp(b1.clone(), e1 + e2))
+                    }
+                    _ => Box::new(Expr::Mul(l, r)),
+                }
+            }
+
+            Expr::Div(left, right) => {
+                let l = left.simplify();
+                let r = right.simplify();
+                match (&*l, &*r) {
+                    // Fold constants: 6 / 2 -> 3
+                    (Expr::Const(a), Expr::Const(b)) if *b != 0.0 => Box::new(Expr::Const(a / b)),
+                    // Zero numerator: 0 / x -> 0
+                    (Expr::Const(0.0), _) => Box::new(Expr::Const(0.0)),
+                    // Identity: x / 1 -> x
+                    (expr, Expr::Const(1.0)) => Box::new(expr.clone()),
+                    // Identity: x / x -> 1
+                    (a, b) if a == b => Box::new(Expr::Const(1.0)),
+                    // Simplify exponents: x^a / x^b -> x^(a-b)
+                    (Expr::Exp(b1, e1), Expr::Exp(b2, e2)) if b1 == b2 => {
+                        Box::new(Expr::Exp(b1.clone(), e1 - e2))
+                    }
+                    _ => Box::new(Expr::Div(l, r)),
+                }
+            }
+
+            Expr::Abs(expr) => {
+                let e = expr.simplify();
+                match &*e {
+                    // Fold constants: abs(3) -> 3
+                    Expr::Const(a) => Box::new(Expr::Const(a.abs())),
+                    // Nested abs: abs(abs(x)) -> abs(x)
+                    Expr::Abs(inner) => Box::new(Expr::Abs(inner.clone())),
+                    _ => Box::new(Expr::Abs(e)),
+                }
+            }
+
+            Expr::Exp(base, exp) => {
+                let b = base.simplify();
+                match (&*b, exp) {
+                    // Fold constants: 2^3 -> 8
+                    (Expr::Const(a), exp) => Box::new(Expr::Const(a.powi(*exp as i32))),
+                    // x^0 -> 1
+                    (base, 0) if !matches!(base, Expr::Const(0.0)) => Box::new(Expr::Const(1.0)),
+                    // Identity: x^1 -> x
+                    (expr, 1) => Box::new(expr.clone()),
+                    // Nested exponents: (x^a)^b -> x^(a*b)
+                    (Expr::Exp(inner_base, inner_exp), outer_exp) => {
+                        Box::new(Expr::Exp(inner_base.clone(), inner_exp * outer_exp))
+                    }
+                    _ => Box::new(Expr::Exp(b, *exp)),
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_simplify() {
+        // Helper function to create a variable
+        fn var(name: &str) -> Box<Expr> {
+            Box::new(Expr::Var(VarRef {
+                name: name.to_string(),
+                vec_ref: Value::from_u32(0), // Dummy value for testing
+                index: 0,
+            }))
+        }
+
+        // Test constant folding
+        // 2 + 3 → 5
+        assert_eq!(
+            *Expr::Add(Box::new(Expr::Const(2.0)), Box::new(Expr::Const(3.0))).simplify(),
+            Expr::Const(5.0)
+        );
+
+        // Test additive identity
+        // x + 0 → x
+        assert_eq!(
+            *Expr::Add(var("x"), Box::new(Expr::Const(0.0))).simplify(),
+            *var("x")
+        );
+
+        // Test multiplicative identity
+        // x * 1 → x
+        assert_eq!(
+            *Expr::Mul(var("x"), Box::new(Expr::Const(1.0))).simplify(),
+            *var("x")
+        );
+
+        // Test multiplication by zero
+        // x * 0 → 0
+        assert_eq!(
+            *Expr::Mul(var("x"), Box::new(Expr::Const(0.0))).simplify(),
+            Expr::Const(0.0)
+        );
+
+        // Test division identity
+        // x / 1 → x
+        assert_eq!(
+            *Expr::Div(var("x"), Box::new(Expr::Const(1.0))).simplify(),
+            *var("x")
+        );
+
+        // Test division by self
+        // x / x → 1
+        assert_eq!(*Expr::Div(var("x"), var("x")).simplify(), Expr::Const(1.0));
+
+        // Test exponent simplification
+        // x^0 → 1
+        assert_eq!(*Expr::Exp(var("x"), 0).simplify(), Expr::Const(1.0));
+        // x^1 → x
+        assert_eq!(*Expr::Exp(var("x"), 1).simplify(), *var("x"));
+
+        // Test absolute value of constant
+        // |-3| → 3
+        assert_eq!(
+            *Expr::Abs(Box::new(Expr::Const(-3.0))).simplify(),
+            Expr::Const(3.0)
+        );
+
+        // Test nested absolute value
+        // ||x|| → |x|
+        assert_eq!(
+            *Expr::Abs(Box::new(Expr::Abs(var("x")))).simplify(),
+            Expr::Abs(var("x"))
+        );
     }
 }

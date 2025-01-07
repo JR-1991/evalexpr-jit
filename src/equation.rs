@@ -68,6 +68,7 @@ impl Equation {
         let node = build_operator_tree(&equation_str)?;
         let variables = extract_variables(&node);
         let ast = build_ast(&node, &variables)?;
+        let ast = *ast.simplify();
         let mut sorted_variables: Vec<String> = variables.keys().cloned().collect();
         sorted_variables.sort();
 
