@@ -24,17 +24,16 @@ evalexpr-jit = "0.1.0"  # Replace with actual version
 
 ```rust
 use evalexpr_jit::Equation;
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a new equation
     let eq = Equation::new("2*x + y^2".to_string())?;
     
     // Evaluate at point (x=1, y=2)
-    let result = eq.eval(&[1.0, 2.0]);
+    let result = eq.eval(&[1.0, 2.0]).unwrap();
     assert_eq!(result, 6.0); // 2*1 + 2^2 = 6
     
     // Compute gradient
-    let gradient = eq.gradient(&[1.0, 2.0]);
+    let gradient = eq.gradient(&[1.0, 2.0]).unwrap();
     assert_eq!(gradient, vec![2.0, 4.0]); // [∂/∂x, ∂/∂y] = [2, 2y]
     
     Ok(())
