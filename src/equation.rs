@@ -139,13 +139,13 @@ impl Equation {
             ));
         }
 
-        // Build the Expr AST
-        let ast = build_ast(&node, &variables)?;
-        let ast = *ast.simplify();
+        // Sort the variables
         let mut sorted_variables: Vec<String> = variables.keys().cloned().collect();
         sorted_variables.sort();
 
-        // Compile the equation
+        // Build the Expr AST
+        let ast = build_ast(&node, &variables)?;
+        let ast = *ast.simplify();
         let fun = build_function(ast.clone())?;
 
         // Derive the first order partial derivatives
