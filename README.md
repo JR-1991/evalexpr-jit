@@ -104,7 +104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get first-order partial derivative
     let dx = eq.derivative("x")?;
     let result = dx(&[2.0, 3.0]);
-    assert_eq!(result, 24.0); // d/dx[x^2*y^2] = 2x*y^2 = 2*2*3^2
+    assert_eq!(result, 36.0); // d/dx[x^2*y^2] = 2x*y^2 = 2*2*3^2
 
     // Compute higher-order mixed derivative
     let dxdy = eq.derive_wrt(&["x", "y"])?;
