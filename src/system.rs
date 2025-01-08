@@ -293,10 +293,7 @@ impl EquationSystem {
         }
 
         // Create combined JIT function for derivatives
-        Ok(build_combined_function(
-            derivative_asts.clone(),
-            self.equations.len(),
-        )?)
+        build_combined_function(derivative_asts.clone(), self.equations.len())
     }
 }
 

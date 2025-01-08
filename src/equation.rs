@@ -57,32 +57,32 @@ pub struct Equation {
 
 impl std::fmt::Debug for Equation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{{\n")?;
-        write!(f, "    {}: {}\n", "Equation".cyan(), self.equation_str)?;
-        write!(f, "    {}: {:?}\n", "Variables".cyan(), self.variables)?;
-        write!(
+        writeln!(f, "{{\n")?;
+        writeln!(f, "    {}: {}\n", "Equation".cyan(), self.equation_str)?;
+        writeln!(f, "    {}: {:?}\n", "Variables".cyan(), self.variables)?;
+        writeln!(
             f,
             "    {}: {:?}\n",
             "Sorted Variables".cyan(),
             self.sorted_variables
         )?;
-        write!(f, "}}")?;
+        writeln!(f, "}}")?;
         Ok(())
     }
 }
 
 impl std::fmt::Display for Equation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{{\n")?;
-        write!(f, "    {}: {}\n", "Equation".cyan(), self.equation_str)?;
-        write!(f, "    {}: {:?}\n", "Variables".cyan(), self.variables)?;
-        write!(
+        writeln!(f, "{{\n")?;
+        writeln!(f, "    {}: {}\n", "Equation".cyan(), self.equation_str)?;
+        writeln!(f, "    {}: {:?}\n", "Variables".cyan(), self.variables)?;
+        writeln!(
             f,
             "    {}: {:?}\n",
             "Sorted Variables".cyan(),
             self.sorted_variables
         )?;
-        write!(f, "}}")?;
+        writeln!(f, "}}")?;
         Ok(())
     }
 }
@@ -187,7 +187,7 @@ impl Equation {
             .collect();
 
         // Build the Expr AST
-        let ast = build_ast(&node, &variables)?;
+        let ast = build_ast(&node, variables)?;
         let ast = *ast.simplify();
         let fun = build_function(ast.clone())?;
 
@@ -445,13 +445,12 @@ pub fn extract_symbols(node: &Node) -> HashMap<String, u32> {
 pub fn extract_all_symbols(equations: &[String]) -> Vec<String> {
     let all_symbols: HashSet<String> = equations
         .iter()
-        .map(|e| {
+        .flat_map(|e| {
             let tree: Node = build_operator_tree(e).unwrap();
             let symbols = extract_symbols(&tree);
 
             symbols.keys().cloned().collect::<Vec<String>>()
         })
-        .flatten()
         .collect();
 
     let mut all_symbols: Vec<String> = all_symbols.into_iter().collect();
