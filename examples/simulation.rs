@@ -48,7 +48,7 @@ impl MichaelisMenten {
 
         // Create a JIT-compiled equation using evalexpr-jit
         // The equation represents the Michaelis-Menten rate law
-        let equation = Equation::from_var_map("(vmax * S) / (km + S)".to_string(), var_map)
+        let equation = Equation::from_var_map("(vmax * S) / (km + S)".to_string(), &var_map)
             .expect("Failed to create Michaelis-Menten equation");
 
         Self { vmax, km, equation }

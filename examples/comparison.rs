@@ -22,7 +22,7 @@ use evalexpr_jit::Equation;
 ///
 /// The results demonstrate the significant speedup achieved through JIT compilation.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let expression = "2*x + y^2 - 3*z / (x + y)".to_string();
+    let expression = "2*x + y^2 + z^2".to_string();
 
     // Build JIT function
     let eq = Equation::new(expression.clone())?;
@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         || {
             eq.eval(&[1.0, 2.0, 3.0]).unwrap();
         },
-        10000000,
+        10_000_000,
     );
 
     // Time evalexpr
@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         || {
             tree.eval_float_with_context(&context).unwrap();
         },
-        10000000,
+        10_000_000,
     );
 
     println!(
