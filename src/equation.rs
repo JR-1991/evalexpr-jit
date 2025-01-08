@@ -25,6 +25,7 @@ use std::collections::{HashMap, HashSet};
 
 use evalexpr::{build_operator_tree, Node, Operator};
 
+use crate::builder::build_combined_function;
 use crate::convert::build_ast;
 use crate::errors::EquationError;
 use crate::expr::Expr;
@@ -366,6 +367,42 @@ impl Equation {
         Ok(fun)
     }
 
+    /// Computes multiple first-order partial derivatives of the function with respect to the given variables,
+    /// returning a single compiled function that evaluates all derivatives at once.
+    ///
+    /// This is more efficient than calling `derive_wrt()` multiple times when you need several
+    /// first-order derivatives, as it compiles them into a single function that pushes all results
+    /// onto a stack.
+    ///
+    /// # Arguments
+    /// * `variables` - Slice of variable names to differentiate with respect to
+    ///
+    /// # Returns
+    /// * `Result<CombinedJITFunction, EquationError>` - Returns a compiled function that evaluates
+    ///   all derivatives and returns them as a Vec<f64>. The derivatives are returned in the same
+    ///   order as the input variables.
+    ///
+    /// # Example
+    /// ```
+    /// # use evalexpr_jit::Equation;
+    /// let eq = Equation::new("x^2 + y^2 + z^2".to_string()).unwrap();
+    /// let derivatives = eq.derive_wrt_stack(&["x", "y"]).unwrap();
+    /// let values = vec![2.0, 3.0, 4.0];
+    /// let results = derivatives(&values); // evaluate [∂/∂x, ∂/∂y] at (2,3,4)
+    /// assert_eq!(results, vec![4.0, 6.0]); // [2x, 2y]
+    /// ```
+    pub fn derive_wrt_stack(
+        &self,
+        variables: &[&str],
+    ) -> Result<CombinedJITFunction, EquationError> {
+        // Derive the derivatives of the equation with respect to the variables
+        let mut derivative_asts = Vec::with_capacity(variables.len());
+        for variable in variables {
+            derivative_asts.push(self.ast.derivative(variable));
+        }
+        build_combined_function(derivative_asts.clone(), variables.len())
+    }
+
     /// Returns the map of variable names to their indices.
     pub fn variables(&self) -> &HashMap<String, u32> {
         &self.variables
@@ -379,6 +416,11 @@ impl Equation {
     /// Returns the compiled evaluation function.
     pub fn fun(&self) -> &JITFunction {
         &self.fun
+    }
+
+    /// Returns the sorted variables.
+    pub fn sorted_variables(&self) -> &[String] {
+        &self.sorted_variables
     }
 
     /// Validates that the input array length matches the number of variables in the equation.
@@ -553,5 +595,24 @@ mod tests {
             &HashMap::from([("x".to_string(), 0), ("z".to_string(), 1)]),
         )
         .expect("Invalid variable");
+    }
+
+    #[test]
+    fn test_derive_wrt_stack() {
+        let eq = Equation::new("x^2 + 2*x*y + y^2 + z^3".to_string()).unwrap();
+
+        // Test getting derivatives with respect to [x, z] (skipping y)
+        let derivatives = eq.derive_wrt_stack(&["x", "z"]).unwrap();
+        let values = vec![2.0, 3.0, 2.0]; // [x, y, z]
+        let results = derivatives(&values);
+
+        // ∂/∂x = 2x + 2y = 2(2) + 2(3) = 10
+        // ∂/∂z = 3z^2 = 3(2^2) = 12
+        assert_eq!(results, vec![10.0, 12.0]);
+
+        // Test different order [z, x] to verify order matters
+        let derivatives = eq.derive_wrt_stack(&["z", "x"]).unwrap();
+        let results = derivatives(&values);
+        assert_eq!(results, vec![12.0, 10.0]);
     }
 }
