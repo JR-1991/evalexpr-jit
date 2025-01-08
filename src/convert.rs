@@ -138,10 +138,7 @@ pub fn build_ast(node: &Node, var_map: &HashMap<String, u32>) -> Result<Expr, Co
             // Check if the second child is a constant
             if let Operator::Const { value } = children[1].operator() {
                 if let evalexpr::Value::Int(exp) = value {
-                    Ok(Expr::Pow(
-                        Box::new(build_ast(&children[0], var_map)?),
-                        *exp as i64,
-                    ))
+                    Ok(Expr::Pow(Box::new(build_ast(&children[0], var_map)?), *exp))
                 } else {
                     Err(ConvertError::ExpOperator(format!(
                         "Expected integer constant for exponent in Exp operator: {:?}",
