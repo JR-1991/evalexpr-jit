@@ -29,8 +29,13 @@ use crate::convert::build_ast;
 use crate::errors::EquationError;
 use crate::expr::Expr;
 use crate::prelude::build_function;
+use colored::Colorize;
+use itertools::Itertools;
 
 pub type JITFunction = Box<dyn Fn(&[f64]) -> f64>;
+/// Type alias for a JIT-compiled function that evaluates multiple equations at once.
+/// Takes a slice of input values and returns a vector of results.
+pub type CombinedJITFunction = Box<dyn Fn(&[f64]) -> Vec<f64>>;
 
 /// Represents a mathematical equation that can be evaluated and differentiated.
 ///
@@ -48,6 +53,38 @@ pub struct Equation {
     derivatives_second_order: Vec<Vec<JITFunction>>,
     variables: HashMap<String, u32>,
     sorted_variables: Vec<String>,
+}
+
+impl std::fmt::Debug for Equation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{\n")?;
+        write!(f, "    {}: {}\n", "Equation".cyan(), self.equation_str)?;
+        write!(f, "    {}: {:?}\n", "Variables".cyan(), self.variables)?;
+        write!(
+            f,
+            "    {}: {:?}\n",
+            "Sorted Variables".cyan(),
+            self.sorted_variables
+        )?;
+        write!(f, "}}")?;
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for Equation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{\n")?;
+        write!(f, "    {}: {}\n", "Equation".cyan(), self.equation_str)?;
+        write!(f, "    {}: {:?}\n", "Variables".cyan(), self.variables)?;
+        write!(
+            f,
+            "    {}: {:?}\n",
+            "Sorted Variables".cyan(),
+            self.sorted_variables
+        )?;
+        write!(f, "}}")?;
+        Ok(())
+    }
 }
 
 impl Equation {
@@ -73,8 +110,8 @@ impl Equation {
     /// ```
     pub fn new(equation_str: String) -> Result<Self, EquationError> {
         let node = build_operator_tree(&equation_str)?;
-        let variables = extract_variables(&node);
-        Self::build(variables, equation_str)
+        let variables = extract_symbols(&node);
+        Self::build(&variables, equation_str)
     }
 
     /// Creates a new `Equation` from a map of variable names to their indices.
@@ -91,7 +128,7 @@ impl Equation {
     /// * `Result<Self, EquationError>` - The compiled equation or an error
     pub fn from_var_map(
         equation_str: String,
-        variables: HashMap<String, u32>,
+        variables: &HashMap<String, u32>,
     ) -> Result<Self, EquationError> {
         Self::build(variables, equation_str)
     }
@@ -117,15 +154,18 @@ impl Equation {
     /// - Equation string fails to parse
     /// - AST conversion fails
     /// - JIT compilation fails for any function
-    fn build(variables: HashMap<String, u32>, equation_str: String) -> Result<Self, EquationError> {
+    fn build(
+        variables: &HashMap<String, u32>,
+        equation_str: String,
+    ) -> Result<Self, EquationError> {
         // Convert the equation string to an AST
         let node = build_operator_tree(&equation_str)?;
 
         // Validate if the variables are in the equation
         let mut non_defined_variables = HashSet::new();
-        let control_variables = extract_variables(&node);
-        for variable in variables.keys() {
-            if !control_variables.contains_key(variable) {
+        let control_variables = extract_symbols(&node);
+        for variable in control_variables.keys() {
+            if !variables.contains_key(variable) {
                 non_defined_variables.insert(variable.clone());
             }
         }
@@ -139,9 +179,12 @@ impl Equation {
             ));
         }
 
-        // Sort the variables
-        let mut sorted_variables: Vec<String> = variables.keys().cloned().collect();
-        sorted_variables.sort();
+        // Sort the variables by their indices
+        let sorted_variables: Vec<String> = variables
+            .iter()
+            .sorted_by_key(|(_, &idx)| idx)
+            .map(|(var, _)| var.clone())
+            .collect();
 
         // Build the Expr AST
         let ast = build_ast(&node, &variables)?;
@@ -174,7 +217,7 @@ impl Equation {
             fun,
             derivatives_first_order,
             derivatives_second_order,
-            variables,
+            variables: variables.clone(),
             sorted_variables,
         })
     }
@@ -364,33 +407,72 @@ impl Equation {
 ///
 /// # Returns
 /// HashMap mapping variable names to their indices in the evaluation array
-pub fn extract_variables(node: &Node) -> HashMap<String, u32> {
-    let mut variables = HashSet::new();
-    extract_variables_from_node(node, &mut variables);
+pub fn extract_symbols(node: &Node) -> HashMap<String, u32> {
+    let mut symbols = HashSet::new();
+    extract_symbols_from_node(node, &mut symbols);
 
-    let mut variables: Vec<String> = variables.into_iter().collect();
-    variables.sort();
+    let mut symbols: Vec<String> = symbols.into_iter().collect();
+    symbols.sort();
 
-    variables
+    symbols
         .into_iter()
         .enumerate()
         .map(|(i, v)| (v, i as u32))
         .collect()
 }
 
+/// Extracts and sorts all unique variables from a collection of equation strings.
+///
+/// This function takes a slice of equation strings, parses each one into an expression tree,
+/// extracts all variable names, and returns them as a sorted vector with duplicates removed.
+///
+/// # Arguments
+/// * `equations` - Slice of strings containing mathematical expressions
+///
+/// # Returns
+/// A sorted `Vec<String>` containing all unique variable names found in the equations
+///
+/// # Panics
+/// Will panic if any equation string cannot be parsed into a valid expression tree
+///
+/// # Example
+/// ```
+/// # use evalexpr_jit::equation::extract_all_symbols;
+/// let equations = vec!["2*x + y".to_string(), "z + x^2".to_string()];
+/// let variables = extract_all_symbols(&equations);
+/// assert_eq!(variables, vec!["x".to_string(), "y".to_string(), "z".to_string()]);
+/// ```
+pub fn extract_all_symbols(equations: &[String]) -> Vec<String> {
+    let all_symbols: HashSet<String> = equations
+        .iter()
+        .map(|e| {
+            let tree: Node = build_operator_tree(e).unwrap();
+            let symbols = extract_symbols(&tree);
+
+            symbols.keys().cloned().collect::<Vec<String>>()
+        })
+        .flatten()
+        .collect();
+
+    let mut all_symbols: Vec<String> = all_symbols.into_iter().collect();
+    all_symbols.sort();
+
+    all_symbols
+}
+
 /// Recursively extracts variable names from an expression tree node.
 ///
 /// # Arguments
 /// * `node` - Current node in the expression tree
-/// * `variables` - Set to store found variable names
-fn extract_variables_from_node(node: &Node, variables: &mut HashSet<String>) {
+/// * `symbols` - Set to store found variable names
+fn extract_symbols_from_node(node: &Node, symbols: &mut HashSet<String>) {
     match node.operator() {
         Operator::VariableIdentifierRead { identifier } => {
-            variables.insert(identifier.to_string());
+            symbols.insert(identifier.to_string());
         }
         _ => {
             for child in node.children() {
-                extract_variables_from_node(child, variables);
+                extract_symbols_from_node(child, symbols);
             }
         }
     }
@@ -457,7 +539,7 @@ mod tests {
     fn test_from_var_map() {
         let eq = Equation::from_var_map(
             "2*x + y^2".to_string(),
-            HashMap::from([("x".to_string(), 1), ("y".to_string(), 0)]),
+            &HashMap::from([("x".to_string(), 1), ("y".to_string(), 0)]),
         )
         .unwrap();
         let result = eq.eval(&[2.0, 1.0]).unwrap();
@@ -469,7 +551,7 @@ mod tests {
     fn test_from_var_map_invalid() {
         let _ = Equation::from_var_map(
             "2*x + y^2".to_string(),
-            HashMap::from([("x".to_string(), 0), ("z".to_string(), 1)]),
+            &HashMap::from([("x".to_string(), 0), ("z".to_string(), 1)]),
         )
         .expect("Invalid variable");
     }
