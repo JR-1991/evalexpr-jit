@@ -20,10 +20,10 @@
 //! let eq = Equation::new("2*x + y^2".to_string()).unwrap();
 //!
 //! // Evaluate at point (x=1, y=2)
-//! let result = eq.eval(&[1.0, 2.0]); // Returns 6.0
+//! let result = eq.eval(&[1.0, 2.0]).unwrap(); // Returns 6.0
 //!
 //! // Compute gradient [∂/∂x, ∂/∂y]
-//! let gradient = eq.gradient(&[1.0, 2.0]); // Returns [2.0, 4.0]
+//! let gradient = eq.gradient(&[1.0, 2.0]).unwrap(); // Returns [2.0, 4.0]
 //! ```
 
 pub use equation::Equation;
@@ -45,3 +45,8 @@ pub mod equation;
 pub mod errors;
 /// Expression tree representation and symbolic differentiation
 pub mod expr;
+/// Functions for linking external functions to the expression tree
+pub(crate) mod operators {
+    pub(crate) mod exp;
+    pub(crate) mod ln;
+}

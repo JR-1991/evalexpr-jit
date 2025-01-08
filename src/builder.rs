@@ -24,7 +24,7 @@ use isa::TargetIsa;
 pub fn build_function(expr: Expr) -> Result<JITFunction, BuilderError> {
     let isa = create_isa()?;
     let (mut module, mut ctx) = create_module_and_context(isa);
-    build_function_body(&mut ctx, expr);
+    build_function_body(&mut ctx, expr, &mut module);
     let raw_fn = compile_and_finalize(&mut module, &mut ctx)?;
 
     // Wrap the unsafe function in a safe interface
@@ -72,7 +72,19 @@ fn create_isa() -> Result<Arc<dyn TargetIsa>, BuilderError> {
 /// A tuple containing the JIT module and function context. The context is initialized
 /// with a signature taking an i64 (pointer to f64 array) and returning an f64.
 fn create_module_and_context(isa: Arc<dyn TargetIsa>) -> (JITModule, Context) {
-    let builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+    let mut flags_builder = settings::builder();
+    flags_builder.set("opt_level", "speed").unwrap();
+    #[cfg(debug_assertions)]
+    flags_builder.set("enable_verifier", "false").unwrap();
+    #[cfg(not(debug_assertions))]
+    flags_builder.set("enable_verifier", "false").unwrap();
+
+    let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+
+    // Link to libm's optimized implementations
+    builder.symbol("exp", libm::exp as *const u8);
+    builder.symbol("ln", libm::log as *const u8);
+
     let module = JITModule::new(builder);
     let mut ctx = module.make_context();
 
@@ -110,8 +122,14 @@ fn update_ast_vec_refs(ast: &mut Expr, vec_ptr: Value) {
         Expr::Abs(expr) => {
             update_ast_vec_refs(expr, vec_ptr);
         }
-        Expr::Exp(base, _) => {
+        Expr::Pow(base, _) => {
             update_ast_vec_refs(base, vec_ptr);
+        }
+        Expr::Exp(expr) => {
+            update_ast_vec_refs(expr, vec_ptr);
+        }
+        Expr::Ln(expr) => {
+            update_ast_vec_refs(expr, vec_ptr);
         }
         // Handle leaf nodes or other expression types that don't contain variables
         Expr::Const(_) => {}
@@ -126,7 +144,7 @@ fn update_ast_vec_refs(ast: &mut Expr, vec_ptr: Value) {
 ///
 /// This creates a single basic block, updates variable references with the input
 /// array pointer, generates code from the AST, and adds a return instruction.
-fn build_function_body(ctx: &mut Context, mut ast: Expr) {
+fn build_function_body(ctx: &mut Context, mut ast: Expr, module: &mut dyn Module) {
     let mut builder_ctx = FunctionBuilderContext::new();
     let mut func_builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
 
@@ -138,7 +156,7 @@ fn build_function_body(ctx: &mut Context, mut ast: Expr) {
     update_ast_vec_refs(&mut ast, vec_ptr);
 
     // Generate code and return
-    let result = ast.codegen(&mut func_builder);
+    let result = ast.codegen(&mut func_builder, module);
     func_builder.ins().return_(&[result]);
 
     func_builder.seal_block(entry_block);

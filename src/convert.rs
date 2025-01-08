@@ -107,6 +107,7 @@ pub fn build_ast(node: &Node, var_map: &HashMap<String, u32>) -> Result<Expr, Co
             let children = node.children();
             match identifier.as_str() {
                 "abs" => Ok(Expr::Abs(Box::new(build_ast(&children[0], var_map)?))),
+                "ln" => Ok(Expr::Ln(Box::new(build_ast(&children[0], var_map)?))),
                 _ => Err(ConvertError::UnsupportedFunction(format!(
                     "Unsupported function: {:?}",
                     identifier
@@ -125,6 +126,7 @@ pub fn build_ast(node: &Node, var_map: &HashMap<String, u32>) -> Result<Expr, Co
                 )))
             }
         }
+
         // Exponentiation - base can be any expression but exponent must be an integer constant
         Operator::Exp => {
             let children = node.children();
@@ -136,7 +138,10 @@ pub fn build_ast(node: &Node, var_map: &HashMap<String, u32>) -> Result<Expr, Co
             // Check if the second child is a constant
             if let Operator::Const { value } = children[1].operator() {
                 if let evalexpr::Value::Int(exp) = value {
-                    Ok(Expr::Exp(Box::new(build_ast(&children[0], var_map)?), *exp))
+                    Ok(Expr::Pow(
+                        Box::new(build_ast(&children[0], var_map)?),
+                        *exp as i64,
+                    ))
                 } else {
                     Err(ConvertError::ExpOperator(format!(
                         "Expected integer constant for exponent in Exp operator: {:?}",

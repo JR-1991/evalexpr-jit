@@ -19,6 +19,9 @@
 
 use cranelift::prelude::*;
 use cranelift_codegen::ir::{immediates::Offset32, Value};
+use cranelift_module::Module;
+
+use crate::operators;
 
 /// Represents a reference to a variable in an expression.
 ///
@@ -57,7 +60,11 @@ pub enum Expr {
     /// Absolute value of an expression
     Abs(Box<Expr>),
     /// Exponentiation of an expression by an integer constant
-    Exp(Box<Expr>, i64),
+    Pow(Box<Expr>, i64),
+    /// Exponential function of an expression
+    Exp(Box<Expr>),
+    /// Natural logarithm of an expression
+    Ln(Box<Expr>),
 }
 
 impl Expr {
@@ -68,48 +75,48 @@ impl Expr {
     ///
     /// # Arguments
     /// * `builder` - The Cranelift FunctionBuilder to emit instructions into
+    /// * `module` - The Cranelift Module to link functions
     ///
     /// # Returns
     /// A Cranelift Value representing the result of this expression
-    pub fn codegen(&self, builder: &mut FunctionBuilder) -> Value {
+    pub fn codegen(&self, builder: &mut FunctionBuilder, module: &mut dyn Module) -> Value {
         match self {
             Expr::Const(val) => builder.ins().f64const(*val),
             Expr::Var(VarRef { vec_ref, index, .. }) => {
-                // Load from the vector at the specified index
                 let index_val = builder.ins().iconst(types::I64, *index as i64);
-                let offset = builder.ins().imul_imm(index_val, 8); // size of f64
-                let vec_ref_val = builder.ins().iadd(*vec_ref, offset);
+                let offset = builder.ins().imul_imm(index_val, 8);
+                let ptr = builder.ins().iadd(*vec_ref, offset);
                 builder
                     .ins()
-                    .load(types::F64, MemFlags::new(), vec_ref_val, Offset32::new(0))
+                    .load(types::F64, MemFlags::new(), ptr, Offset32::new(0))
             }
             Expr::Add(left, right) => {
                 // Recursively generate code for both sides
-                let lhs = left.codegen(builder); // This could be another nested expression
-                let rhs = right.codegen(builder); // This could be another nested expression
+                let lhs = left.codegen(builder, module); // This could be another nested expression
+                let rhs = right.codegen(builder, module); // This could be another nested expression
                 builder.ins().fadd(lhs, rhs)
             }
             Expr::Mul(left, right) => {
-                let lhs = left.codegen(builder);
-                let rhs = right.codegen(builder);
+                let lhs = left.codegen(builder, module);
+                let rhs = right.codegen(builder, module);
                 builder.ins().fmul(lhs, rhs)
             }
             Expr::Sub(left, right) => {
-                let lhs = left.codegen(builder);
-                let rhs = right.codegen(builder);
+                let lhs = left.codegen(builder, module);
+                let rhs = right.codegen(builder, module);
                 builder.ins().fsub(lhs, rhs)
             }
             Expr::Div(left, right) => {
-                let lhs = left.codegen(builder);
-                let rhs = right.codegen(builder);
+                let lhs = left.codegen(builder, module);
+                let rhs = right.codegen(builder, module);
                 builder.ins().fdiv(lhs, rhs)
             }
             Expr::Abs(expr) => {
-                let expr = expr.codegen(builder);
+                let expr = expr.codegen(builder, module);
                 builder.ins().fabs(expr)
             }
-            Expr::Exp(base, exp) => {
-                let base_val = base.codegen(builder);
+            Expr::Pow(base, exp) => {
+                let base_val = base.codegen(builder, module);
                 if *exp == 0 {
                     // x^0 = 1
                     builder.ins().f64const(1.0)
@@ -124,6 +131,16 @@ impl Expr {
                     }
                     result
                 }
+            }
+            Expr::Exp(expr) => {
+                let arg = expr.codegen(builder, module);
+                let func_id = operators::exp::link_exp(module).unwrap();
+                operators::exp::call_exp(builder, module, func_id, arg)
+            }
+            Expr::Ln(expr) => {
+                let arg = expr.codegen(builder, module);
+                let func_id = operators::ln::link_ln(module).unwrap();
+                operators::ln::call_ln(builder, module, func_id, arg)
             }
         }
     }
@@ -189,7 +206,7 @@ impl Expr {
                         Box::new(Expr::Mul(right.clone(), left.derivative(with_respect_to))),
                         Box::new(Expr::Mul(left.clone(), right.derivative(with_respect_to))),
                     )),
-                    Box::new(Expr::Exp(right.clone(), 2)),
+                    Box::new(Expr::Pow(right.clone(), 2)),
                 ))
             }
 
@@ -201,14 +218,30 @@ impl Expr {
                 ))
             }
 
-            Expr::Exp(base, exp) => {
+            Expr::Pow(base, exp) => {
                 // d/dx(f^n) = n * f^(n-1) * df/dx
                 Box::new(Expr::Mul(
                     Box::new(Expr::Mul(
                         Box::new(Expr::Const(*exp as f64)),
-                        Box::new(Expr::Exp(base.clone(), exp - 1)),
+                        Box::new(Expr::Pow(base.clone(), exp - 1)),
                     )),
                     base.derivative(with_respect_to),
+                ))
+            }
+
+            Expr::Exp(expr) => {
+                // d/dx(e^f) = e^f * df/dx
+                Box::new(Expr::Mul(
+                    Box::new(Expr::Exp(expr.clone())),
+                    expr.derivative(with_respect_to),
+                ))
+            }
+
+            Expr::Ln(expr) => {
+                // d/dx(ln(f)) = 1/f * df/dx
+                Box::new(Expr::Mul(
+                    Box::new(Expr::Div(Box::new(Expr::Const(1.0)), expr.clone())),
+                    expr.derivative(with_respect_to),
                 ))
             }
         }
@@ -267,8 +300,8 @@ impl Expr {
                     // Identity: x * 1 -> x
                     (expr, Expr::Const(1.0)) | (Expr::Const(1.0), expr) => Box::new(expr.clone()),
                     // Combine exponents: x^a * x^b -> x^(a+b)
-                    (Expr::Exp(b1, e1), Expr::Exp(b2, e2)) if b1 == b2 => {
-                        Box::new(Expr::Exp(b1.clone(), e1 + e2))
+                    (Expr::Pow(b1, e1), Expr::Pow(b2, e2)) if b1 == b2 => {
+                        Box::new(Expr::Pow(b1.clone(), e1 + e2))
                     }
                     _ => Box::new(Expr::Mul(l, r)),
                 }
@@ -287,8 +320,8 @@ impl Expr {
                     // Identity: x / x -> 1
                     (a, b) if a == b => Box::new(Expr::Const(1.0)),
                     // Simplify exponents: x^a / x^b -> x^(a-b)
-                    (Expr::Exp(b1, e1), Expr::Exp(b2, e2)) if b1 == b2 => {
-                        Box::new(Expr::Exp(b1.clone(), e1 - e2))
+                    (Expr::Pow(b1, e1), Expr::Pow(b2, e2)) if b1 == b2 => {
+                        Box::new(Expr::Pow(b1.clone(), e1 - e2))
                     }
                     _ => Box::new(Expr::Div(l, r)),
                 }
@@ -305,7 +338,7 @@ impl Expr {
                 }
             }
 
-            Expr::Exp(base, exp) => {
+            Expr::Pow(base, exp) => {
                 let b = base.simplify();
                 match (&*b, exp) {
                     // Fold constants: 2^3 -> 8
@@ -315,11 +348,68 @@ impl Expr {
                     // Identity: x^1 -> x
                     (expr, 1) => Box::new(expr.clone()),
                     // Nested exponents: (x^a)^b -> x^(a*b)
-                    (Expr::Exp(inner_base, inner_exp), outer_exp) => {
-                        Box::new(Expr::Exp(inner_base.clone(), inner_exp * outer_exp))
+                    (Expr::Pow(inner_base, inner_exp), outer_exp) => {
+                        Box::new(Expr::Pow(inner_base.clone(), inner_exp * outer_exp))
                     }
-                    _ => Box::new(Expr::Exp(b, *exp)),
+                    _ => Box::new(Expr::Pow(b, *exp)),
                 }
+            }
+
+            Expr::Exp(expr) => {
+                let e = expr.simplify();
+                match &*e {
+                    Expr::Const(a) => Box::new(Expr::Const(a.exp())),
+                    _ => Box::new(Expr::Exp(e)),
+                }
+            }
+
+            Expr::Ln(expr) => {
+                let e = expr.simplify();
+                match &*e {
+                    Expr::Const(a) => Box::new(Expr::Const(a.ln())),
+                    _ => Box::new(Expr::Ln(e)),
+                }
+            }
+        }
+    }
+
+    /// Inserts an expression by replacing nodes that match a predicate.
+    /// Returns a new expression tree with the replacements applied.
+    ///
+    /// # Arguments
+    /// * `predicate` - A closure that determines which nodes to replace
+    /// * `replacement` - The expression to insert where the predicate matches
+    pub fn insert<F>(&self, predicate: F, replacement: &Expr) -> Box<Expr>
+    where
+        F: Fn(&Expr) -> bool + Clone,
+    {
+        if predicate(self) {
+            Box::new(replacement.clone())
+        } else {
+            match self {
+                Expr::Const(_) | Expr::Var(_) => Box::new(self.clone()),
+                Expr::Add(left, right) => Box::new(Expr::Add(
+                    left.insert(predicate.clone(), replacement),
+                    right.insert(predicate, replacement),
+                )),
+                Expr::Mul(left, right) => Box::new(Expr::Mul(
+                    left.insert(predicate.clone(), replacement),
+                    right.insert(predicate, replacement),
+                )),
+                Expr::Sub(left, right) => Box::new(Expr::Sub(
+                    left.insert(predicate.clone(), replacement),
+                    right.insert(predicate, replacement),
+                )),
+                Expr::Div(left, right) => Box::new(Expr::Div(
+                    left.insert(predicate.clone(), replacement),
+                    right.insert(predicate, replacement),
+                )),
+                Expr::Abs(expr) => Box::new(Expr::Abs(expr.insert(predicate, replacement))),
+                Expr::Pow(base, exp) => {
+                    Box::new(Expr::Pow(base.insert(predicate, replacement), *exp))
+                }
+                Expr::Exp(expr) => Box::new(Expr::Exp(expr.insert(predicate, replacement))),
+                Expr::Ln(expr) => Box::new(Expr::Ln(expr.insert(predicate, replacement))),
             }
         }
     }
@@ -381,9 +471,9 @@ mod tests {
 
         // Test exponent simplification
         // x^0 → 1
-        assert_eq!(*Expr::Exp(var("x"), 0).simplify(), Expr::Const(1.0));
+        assert_eq!(*Expr::Pow(var("x"), 0).simplify(), Expr::Const(1.0));
         // x^1 → x
-        assert_eq!(*Expr::Exp(var("x"), 1).simplify(), *var("x"));
+        assert_eq!(*Expr::Pow(var("x"), 1).simplify(), *var("x"));
 
         // Test absolute value of constant
         // |-3| → 3
@@ -397,6 +487,35 @@ mod tests {
         assert_eq!(
             *Expr::Abs(Box::new(Expr::Abs(var("x")))).simplify(),
             Expr::Abs(var("x"))
+        );
+    }
+
+    #[test]
+    fn test_insert() {
+        // Helper function to create a variable
+        fn var(name: &str) -> Box<Expr> {
+            Box::new(Expr::Var(VarRef {
+                name: name.to_string(),
+                vec_ref: Value::from_u32(0),
+                index: 0,
+            }))
+        }
+
+        // Create expression: x + y
+        let expr = Box::new(Expr::Add(var("x"), var("y")));
+
+        // Replace all occurrences of 'x' with '2*z'
+        let replacement = Box::new(Expr::Mul(Box::new(Expr::Const(2.0)), var("z")));
+
+        let result = expr.insert(|e| matches!(e, Expr::Var(v) if v.name == "x"), &replacement);
+
+        // Expected: (2*z) + y
+        assert_eq!(
+            *result,
+            Expr::Add(
+                Box::new(Expr::Mul(Box::new(Expr::Const(2.0)), var("z"),)),
+                var("y"),
+            )
         );
     }
 }
