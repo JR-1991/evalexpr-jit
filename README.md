@@ -1,5 +1,7 @@
 # EvalExpr-JIT
 
+![Crates.io Version](https://img.shields.io/crates/v/evalexpr-jit) ![Build Status](https://github.com/JR-1991/evalexpr-jit/actions/workflows/test.yml/badge.svg) 
+
 A high-performance mathematical expression evaluator with JIT compilation and automatic differentiation support. Builds on top of [evalexpr](https://github.com/ISibboI/evalexpr) and [Cranelift](https://github.com/bytecodealliance/wasmtime/tree/main/cranelift).
 
 ## Features
