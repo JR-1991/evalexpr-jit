@@ -15,11 +15,17 @@ A high-performance mathematical expression evaluator with JIT compilation and au
 
 ## Installation
 
-Add this to your `Cargo.toml`:
+Install the crate from crates.io:
+
+```sh
+cargo add evalexpr-jit
+```
+
+or add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-evalexpr-jit = "0.1.0"  # Replace with actual version
+evalexpr-jit = "0.1.2"  # Replace with actual version
 ```
 
 ## Quick Start
