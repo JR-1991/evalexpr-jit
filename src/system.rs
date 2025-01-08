@@ -48,7 +48,7 @@ pub struct EquationSystem {
     /// The JIT-compiled function that evaluates all equations
     pub combined_fun: CombinedJITFunction,
     /// Jacobian of the system
-    pub jacobian_funs: Vec<CombinedJITFunction>,
+    pub jacobian_funs: HashMap<String, CombinedJITFunction>,
 }
 
 impl EquationSystem {
@@ -147,7 +147,7 @@ impl EquationSystem {
         let combined_fun = build_combined_function(asts.clone(), expressions.len())?;
 
         // Create derivative functions for each variable forming a Jacobian matrix
-        let mut jacobian_funs = Vec::with_capacity(variable_map.len());
+        let mut jacobian_funs = HashMap::with_capacity(variable_map.len());
 
         let sorted_variables: Vec<String> = variable_map
             .iter()
@@ -161,7 +161,7 @@ impl EquationSystem {
                 .map(|ast| ast.derivative(&var))
                 .collect::<Vec<Box<Expr>>>();
             let jacobian_fun = build_combined_function(derivative_ast, expressions.len())?;
-            jacobian_funs.push(jacobian_fun);
+            jacobian_funs.insert(var, jacobian_fun);
         }
 
         Ok(Self {
@@ -186,14 +186,43 @@ impl EquationSystem {
     /// Returns `EquationError::InvalidInputLength` if the number of inputs doesn't match
     /// the number of variables
     pub fn eval(&self, inputs: &[f64]) -> Result<Vec<f64>, EquationError> {
-        if inputs.len() != self.sorted_variables.len() {
-            return Err(EquationError::InvalidInputLength {
-                expected: self.sorted_variables.len(),
-                got: inputs.len(),
-            });
-        }
+        self.validate_input_length(inputs)?;
 
         Ok((self.combined_fun)(inputs))
+    }
+
+    /// Returns the gradient of the equation system with respect to a specific variable.
+    ///
+    /// The gradient contains the partial derivatives of all equations with respect to the given variable,
+    /// evaluated at the provided input values.
+    ///
+    /// # Arguments
+    /// * `inputs` - Slice of input values at which to evaluate the gradient, must match the number of variables
+    /// * `variable` - Name of the variable to compute derivatives with respect to
+    ///
+    /// # Returns
+    /// * `Ok(Vec<f64>)` - Vector containing the partial derivatives of each equation with respect to
+    ///   the specified variable, evaluated at the given input values
+    /// * `Err(EquationError)` - If the number of inputs doesn't match the number of variables,
+    ///   or if the specified variable is not found in the system
+    ///
+    /// # Example
+    /// ```
+    /// # use evalexpr_jit::system::EquationSystem;
+    /// let system = EquationSystem::new(vec![
+    ///     "x^2*y".to_string(),  // f1
+    ///     "x*y^2".to_string(),  // f2
+    /// ]).unwrap();
+    ///
+    /// let gradient = system.gradient(&[2.0, 3.0], "x").unwrap();
+    /// // gradient contains [12.0, 9.0] (∂f1/∂x, ∂f2/∂x)
+    /// ```
+    pub fn gradient(&self, inputs: &[f64], variable: &str) -> Result<Vec<f64>, EquationError> {
+        self.validate_input_length(inputs)?;
+
+        Ok((self.jacobian_funs.get(variable).ok_or(
+            EquationError::VariableNotFound(variable.to_string()),
+        )?)(inputs))
     }
 
     /// Computes the Jacobian matrix of the equation system at the given input values.
@@ -223,20 +252,20 @@ impl EquationSystem {
     ///     "x*y^2".to_string(),
     /// ]).unwrap();
     ///
-    /// let jacobian = system.jacobian(&[2.0, 3.0]).unwrap();
+    /// let jacobian = system.jacobian(&[2.0, 3.0], None).unwrap();
     /// // jacobian[0] contains [6.0, 9.0] (d/dx[x^2*y], d/dx[xy^2])
     /// // jacobian[1] contains [4.0, 12.0] (d/dy[x^2*y], d/dy[xy^2])
     /// ```
-    pub fn jacobian(&self, inputs: &[f64]) -> Result<Vec<Vec<f64>>, EquationError> {
-        if inputs.len() != self.sorted_variables.len() {
-            return Err(EquationError::InvalidInputLength {
-                expected: self.sorted_variables.len(),
-                got: inputs.len(),
-            });
-        }
+    pub fn jacobian(
+        &self,
+        inputs: &[f64],
+        variables: Option<&[String]>,
+    ) -> Result<Vec<Vec<f64>>, EquationError> {
+        self.validate_input_length(inputs)?;
 
+        let sorted_variables = variables.unwrap_or(&self.sorted_variables);
         let mut results = Vec::with_capacity(self.equations.len());
-        let n_vars = self.jacobian_funs.len();
+        let n_vars = sorted_variables.len();
 
         // Initialize vectors for each equation
         for _ in 0..self.equations.len() {
@@ -244,7 +273,8 @@ impl EquationSystem {
         }
 
         // Fill the transposed matrix
-        for fun in self.jacobian_funs.iter() {
+        for var in sorted_variables {
+            let fun = self.jacobian_funs.get(var).unwrap();
             let derivatives = fun(inputs);
             for (eq_idx, &value) in derivatives.iter().enumerate() {
                 results[eq_idx].push(value);
@@ -294,6 +324,46 @@ impl EquationSystem {
 
         // Create combined JIT function for derivatives
         build_combined_function(derivative_asts.clone(), self.equations.len())
+    }
+
+    /// Returns the sorted variables.
+    pub fn sorted_variables(&self) -> &[String] {
+        &self.sorted_variables
+    }
+
+    /// Returns the map of variable names to their indices.
+    pub fn variables(&self) -> &HashMap<String, u32> {
+        &self.variable_map
+    }
+
+    /// Returns the original equation strings.
+    pub fn equations(&self) -> &[String] {
+        &self.equations
+    }
+
+    /// Returns the compiled evaluation function.
+    pub fn fun(&self) -> &CombinedJITFunction {
+        &self.combined_fun
+    }
+
+    /// Returns a vector of gradient functions.
+    pub fn jacobian_funs(&self) -> &HashMap<String, CombinedJITFunction> {
+        &self.jacobian_funs
+    }
+
+    /// Return a specific Jacobian function.
+    pub fn gradient_fun(&self, variable: &str) -> &CombinedJITFunction {
+        self.jacobian_funs.get(variable).unwrap()
+    }
+
+    fn validate_input_length(&self, inputs: &[f64]) -> Result<(), EquationError> {
+        if inputs.len() != self.sorted_variables.len() {
+            return Err(EquationError::InvalidInputLength {
+                expected: self.sorted_variables.len(),
+                got: inputs.len(),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -455,7 +525,7 @@ mod tests {
             "x*y^2".to_string(), // f2
         ])?;
 
-        let jacobian = system.jacobian(&[2.0, 3.0])?;
+        let jacobian = system.jacobian(&[2.0, 3.0], None)?;
 
         // Jacobian matrix should be:
         // [∂f1/∂x  ∂f1/∂y] = [12.0  4.0]   // derivatives of first equation
