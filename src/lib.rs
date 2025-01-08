@@ -27,6 +27,7 @@
 //! ```
 
 pub use equation::Equation;
+pub use system::EquationSystem;
 
 pub mod prelude {
     pub use crate::builder::build_function;
@@ -45,8 +46,11 @@ pub mod equation;
 pub mod errors;
 /// Expression tree representation and symbolic differentiation
 pub mod expr;
+/// System of equations
+pub mod system;
 /// Functions for linking external functions to the expression tree
 pub(crate) mod operators {
     pub(crate) mod exp;
     pub(crate) mod ln;
+    pub(crate) mod sqrt;
 }

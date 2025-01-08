@@ -4,12 +4,12 @@
 use std::sync::Arc;
 
 use crate::{
-    equation::JITFunction,
-    errors::BuilderError,
+    equation::{CombinedJITFunction, JITFunction},
+    errors::{BuilderError, EquationError},
     expr::{Expr, VarRef},
 };
 use cranelift::prelude::*;
-use cranelift_codegen::Context;
+use cranelift_codegen::{ir::immediates::Offset32, Context};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{Linkage, Module};
 use isa::TargetIsa;
@@ -21,10 +21,10 @@ use isa::TargetIsa;
 ///
 /// # Returns
 /// A wrapped function that safely takes a slice of f64 values and returns an f64
-pub fn build_function(expr: Expr) -> Result<JITFunction, BuilderError> {
+pub fn build_function(expr: Expr) -> Result<JITFunction, EquationError> {
     let isa = create_isa()?;
     let (mut module, mut ctx) = create_module_and_context(isa);
-    build_function_body(&mut ctx, expr, &mut module);
+    build_function_body(&mut ctx, expr, &mut module)?;
     let raw_fn = compile_and_finalize(&mut module, &mut ctx)?;
 
     // Wrap the unsafe function in a safe interface
@@ -36,7 +36,7 @@ pub fn build_function(expr: Expr) -> Result<JITFunction, BuilderError> {
 }
 
 /// Creates an Instruction Set Architecture (ISA) target for code generation.
-fn create_isa() -> Result<Arc<dyn TargetIsa>, BuilderError> {
+pub(crate) fn create_isa() -> Result<Arc<dyn TargetIsa>, BuilderError> {
     let mut flag_builder = settings::builder();
 
     // Get target triple to detect architecture
@@ -71,19 +71,20 @@ fn create_isa() -> Result<Arc<dyn TargetIsa>, BuilderError> {
 /// # Returns
 /// A tuple containing the JIT module and function context. The context is initialized
 /// with a signature taking an i64 (pointer to f64 array) and returning an f64.
-fn create_module_and_context(isa: Arc<dyn TargetIsa>) -> (JITModule, Context) {
+pub(crate) fn create_module_and_context(isa: Arc<dyn TargetIsa>) -> (JITModule, Context) {
     let mut flags_builder = settings::builder();
     flags_builder.set("opt_level", "speed").unwrap();
     #[cfg(debug_assertions)]
-    flags_builder.set("enable_verifier", "false").unwrap();
+    flags_builder.set("enable_verifier", "true").unwrap();
     #[cfg(not(debug_assertions))]
     flags_builder.set("enable_verifier", "false").unwrap();
 
     let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
 
-    // Link to libm's optimized implementations
-    builder.symbol("exp", libm::exp as *const u8);
-    builder.symbol("ln", libm::log as *const u8);
+    builder.symbol("exp", f64::exp as *const u8);
+    builder.symbol("ln", f64::log as *const u8);
+    builder.symbol("sqrt", f64::sqrt as *const u8);
+    builder.symbol("powi", f64::powi as *const u8);
 
     let module = JITModule::new(builder);
     let mut ctx = module.make_context();
@@ -131,8 +132,15 @@ fn update_ast_vec_refs(ast: &mut Expr, vec_ptr: Value) {
         Expr::Ln(expr) => {
             update_ast_vec_refs(expr, vec_ptr);
         }
+        Expr::Sqrt(expr) => {
+            update_ast_vec_refs(expr, vec_ptr);
+        }
+        Expr::Neg(expr) => {
+            update_ast_vec_refs(expr, vec_ptr);
+        }
         // Handle leaf nodes or other expression types that don't contain variables
         Expr::Const(_) => {}
+        Expr::Cached(_, _) => {}
     }
 }
 
@@ -144,7 +152,11 @@ fn update_ast_vec_refs(ast: &mut Expr, vec_ptr: Value) {
 ///
 /// This creates a single basic block, updates variable references with the input
 /// array pointer, generates code from the AST, and adds a return instruction.
-fn build_function_body(ctx: &mut Context, mut ast: Expr, module: &mut dyn Module) {
+fn build_function_body(
+    ctx: &mut Context,
+    mut ast: Expr,
+    module: &mut dyn Module,
+) -> Result<(), EquationError> {
     let mut builder_ctx = FunctionBuilderContext::new();
     let mut func_builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
 
@@ -156,11 +168,13 @@ fn build_function_body(ctx: &mut Context, mut ast: Expr, module: &mut dyn Module
     update_ast_vec_refs(&mut ast, vec_ptr);
 
     // Generate code and return
-    let result = ast.codegen(&mut func_builder, module);
+    let result = ast.codegen(&mut func_builder, module)?;
     func_builder.ins().return_(&[result]);
 
     func_builder.seal_block(entry_block);
     func_builder.finalize();
+
+    Ok(())
 }
 
 /// Compiles and finalizes the function, returning a callable function pointer.
@@ -191,4 +205,96 @@ fn compile_and_finalize(
     let code_ptr = module.get_finalized_function(func_id);
     let func = unsafe { std::mem::transmute::<*const u8, fn(*const f64) -> f64>(code_ptr) };
     Ok(func)
+}
+
+/// Builds a JIT-compiled function that evaluates multiple expressions together.
+///
+/// # Arguments
+/// * `exprs` - Vector of expression ASTs to compile
+/// * `results_len` - Number of results to expect (must match number of expressions)
+///
+/// # Returns
+/// A boxed function that takes input values and returns a vector of results
+///
+/// This function generates machine code that:
+/// 1. Takes pointers to input and output arrays
+/// 2. Evaluates all expressions sequentially
+/// 3. Stores results directly in the output array
+/// 4. Returns the filled output array
+pub fn build_combined_function(
+    exprs: Vec<Box<Expr>>,
+    results_len: usize,
+) -> Result<CombinedJITFunction, EquationError> {
+    // Set up JIT compilation context
+    let mut builder_context = FunctionBuilderContext::new();
+    let mut codegen_context = Context::new();
+    let isa = create_isa()?;
+    let (mut module, _) = create_module_and_context(isa);
+
+    // Create function signature: fn(input_ptr: *const f64, output_ptr: *mut f64)
+    let mut sig = module.make_signature();
+    sig.params
+        .push(AbiParam::new(module.target_config().pointer_type())); // input_ptr
+    sig.params
+        .push(AbiParam::new(module.target_config().pointer_type())); // output_ptr
+                                                                     // Remove return value since we'll write directly to output buffer
+
+    // Create function
+    let func_id = module
+        .declare_function("combined", Linkage::Export, &sig)
+        .unwrap();
+
+    codegen_context.func.signature = sig; // Set signature before moving
+    let func = &mut codegen_context.func; // Borrow instead of move
+    let mut builder = FunctionBuilder::new(func, &mut builder_context);
+
+    // Create entry block
+    let entry_block = builder.create_block();
+    builder.append_block_params_for_function_params(entry_block);
+    builder.switch_to_block(entry_block);
+    builder.seal_block(entry_block);
+
+    // Get input array and output array parameters
+    let output_ptr = builder.block_params(entry_block)[1];
+
+    // Generate code for each expression
+    for (i, expr) in exprs.iter().enumerate() {
+        let result = expr.codegen(&mut builder, &mut module)?;
+
+        // Store result in output array
+        let offset = i as i64 * 8;
+        builder.ins().store(
+            MemFlags::new(),
+            result,
+            output_ptr,
+            Offset32::new(offset as i32),
+        );
+    }
+
+    // Return void since we wrote directly to output buffer
+    builder.ins().return_(&[]);
+    builder.finalize();
+
+    // Finalize the function
+    module
+        .define_function(func_id, &mut codegen_context)
+        .unwrap();
+    module
+        .finalize_definitions()
+        .map_err(BuilderError::ModuleError)?;
+
+    // Get function pointer
+    let code = module.get_finalized_function(func_id);
+
+    // Create wrapper function
+    let wrapper = Box::new(move |inputs: &[f64]| -> Vec<f64> {
+        let mut results = vec![0.0; results_len];
+        unsafe {
+            let f: extern "C" fn(*const f64, *mut f64) = std::mem::transmute(code);
+            f(inputs.as_ptr(), results.as_mut_ptr());
+        }
+        results
+    });
+
+    Ok(wrapper)
 }
