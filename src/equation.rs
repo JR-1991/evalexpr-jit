@@ -6,10 +6,11 @@
 //!
 //! # Features
 //!
-//! - JIT compilation of expressions using Cranelift
+//! - JIT compilation of expressions using Cranelift for fast evaluation
 //! - Automatic differentiation up to second order derivatives
-//! - Support for multiple variables
-//! - Efficient evaluation using compiled native code
+//! - Support for multiple variables with flexible ordering
+//! - Efficient evaluation using native compiled code
+//! - Stack-based evaluation for computing multiple derivatives at once
 //!
 //! # Example
 //!
@@ -19,9 +20,19 @@
 //! let eq = Equation::new("2*x + y^2".to_string()).unwrap();
 //! let result = eq.eval(&[1.0, 2.0]); // Evaluates to 6.0
 //! let gradient = eq.gradient(&[1.0, 2.0]); // Computes [2.0, 4.0]
+//! let hessian = eq.hessian(&[1.0, 2.0]); // Computes [[0.0, 0.0], [0.0, 2.0]]
 //! ```
+//!
+//! # Variable Handling
+//!
+//! Variables can be specified either:
+//! - Automatically extracted and sorted alphabetically using `new()`
+//! - Explicitly mapped to indices using `from_var_map()`
+//!
+//! Input arrays must match the variable ordering.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use evalexpr::{build_operator_tree, Node, Operator};
 
@@ -30,22 +41,26 @@ use crate::convert::build_ast;
 use crate::errors::EquationError;
 use crate::expr::Expr;
 use crate::prelude::build_function;
+use crate::types::{CombinedJITFunction, JITFunction};
 use colored::Colorize;
 use itertools::Itertools;
-
-pub type JITFunction = Box<dyn Fn(&[f64]) -> f64>;
-/// Type alias for a JIT-compiled function that evaluates multiple equations at once.
-/// Takes a slice of input values and returns a vector of results.
-pub type CombinedJITFunction = Box<dyn Fn(&[f64]) -> Vec<f64>>;
 
 /// Represents a mathematical equation that can be evaluated and differentiated.
 ///
 /// This struct holds both the original equation string and compiled functions for:
 /// - Evaluating the equation
-/// - Computing derivatives with respect to each variable
+/// - Computing first order partial derivatives
+/// - Computing second order partial derivatives (Hessian)
 /// - Tracking variable names and their indices
 ///
-/// The equation is JIT-compiled on creation for efficient evaluation.
+/// The equation is JIT-compiled on creation for efficient evaluation. All derivatives
+/// are also pre-compiled for fast computation.
+///
+/// Variables can be specified either:
+/// - Automatically extracted and sorted alphabetically using `new()`
+/// - Explicitly mapped to indices using `from_var_map()`
+///
+/// Input arrays must match the variable ordering.
 pub struct Equation {
     equation_str: String,
     ast: Box<Expr>,
@@ -92,11 +107,10 @@ impl Equation {
     /// Creates a new `Equation` from a string representation.
     ///
     /// This function will automatically extract the variable names from the equation string
-    /// and use them to create the `Equation` instance. Please note, the variable names
-    /// will be sorted alphabetically and it is assumed that the input array of values
-    /// will be in the same order as the variables.
+    /// and use them to create the `Equation` instance. The variable names will be sorted
+    /// alphabetically and it is assumed that the input array of values will be in the same order.
     ///
-    /// If you want more control over the variable names, you can use the `from_var_map` function.
+    /// For more control over variable ordering, use `from_var_map()` instead.
     ///
     /// # Arguments
     /// * `equation_str` - The equation as a string (e.g. "2*x + y^2")
@@ -108,6 +122,7 @@ impl Equation {
     /// ```
     /// # use evalexpr_jit::Equation;
     /// let eq = Equation::new("2*x + y^2".to_string()).unwrap();
+    /// let result = eq.eval(&[1.0, 2.0]).unwrap(); // x=1, y=2 -> 2*1 + 2^2 = 6
     /// ```
     pub fn new(equation_str: String) -> Result<Self, EquationError> {
         let node = build_operator_tree(&equation_str)?;
@@ -117,16 +132,27 @@ impl Equation {
 
     /// Creates a new `Equation` from a map of variable names to their indices.
     ///
-    /// This function is useful when you want to manually specify the variable names
-    /// and their indices in the evaluation array. In cases, where you want more control
-    /// over the variable names, you can use this function.
+    /// This function allows explicit control over variable ordering by specifying
+    /// the mapping between variable names and their positions in input arrays.
     ///
     /// # Arguments
-    /// * `variables` - A map of variable names to their indices
     /// * `equation_str` - The equation as a string
+    /// * `variables` - A map of variable names to their indices in input arrays
     ///
     /// # Returns
     /// * `Result<Self, EquationError>` - The compiled equation or an error
+    ///
+    /// # Example
+    /// ```
+    /// # use evalexpr_jit::Equation;
+    /// # use std::collections::HashMap;
+    /// let mut vars = HashMap::new();
+    /// vars.insert("y".to_string(), 0); // y will be first in input arrays
+    /// vars.insert("x".to_string(), 1); // x will be second
+    ///
+    /// let eq = Equation::from_var_map("2*x + y^2".to_string(), &vars).unwrap();
+    /// let result = eq.eval(&[2.0, 1.0]).unwrap(); // y=2, x=1 -> 2*1 + 2^2 = 6
+    /// ```
     pub fn from_var_map(
         equation_str: String,
         variables: &HashMap<String, u32>,
@@ -144,7 +170,7 @@ impl Equation {
     /// - Computing and compiling second order partial derivatives (Hessian)
     ///
     /// # Arguments
-    /// * `variables` - Map of variable names to their indices in the evaluation array
+    /// * `variables` - Map of variable names to their indices in input arrays
     /// * `equation_str` - The equation as a string
     ///
     /// # Returns
@@ -155,6 +181,7 @@ impl Equation {
     /// - Equation string fails to parse
     /// - AST conversion fails
     /// - JIT compilation fails for any function
+    /// - Variables in equation not found in provided map
     fn build(
         variables: &HashMap<String, u32>,
         equation_str: String,
@@ -229,27 +256,31 @@ impl Equation {
     /// * `values` - Array of f64 values corresponding to variables in order
     ///
     /// # Returns
-    /// The result of evaluating the equation
+    /// * `Result<f64, EquationError>` - The result of evaluating the equation
     ///
     /// # Example
     /// ```
     /// # use evalexpr_jit::Equation;
     /// let eq = Equation::new("2*x + y^2".to_string()).unwrap();
-    /// let result = eq.eval(&[1.0, 2.0]).unwrap(); // x = 1, y = 2
+    /// let result = eq.eval(&[1.0, 2.0]).unwrap(); // x=1, y=2
     /// assert_eq!(result, 6.0); // 2*1 + 2^2 = 6
     /// ```
+    ///
+    /// # Errors
+    /// Returns `EquationError::InvalidInputLength` if the length of values doesn't match
+    /// the number of variables.
     pub fn eval(&self, values: &[f64]) -> Result<f64, EquationError> {
         self.validate_input_length(values)?;
         Ok((self.fun)(values))
     }
 
-    /// Computes the gradient (all partial derivatives) at the given point.
+    /// Computes the gradient (all first order partial derivatives) at the given point.
     ///
     /// # Arguments
     /// * `values` - Array of f64 values corresponding to variables in order
     ///
     /// # Returns
-    /// Vector of partial derivatives in the same order as variables
+    /// * `Result<Vec<f64>, EquationError>` - Vector of partial derivatives in variable order
     ///
     /// # Example
     /// ```
@@ -258,6 +289,10 @@ impl Equation {
     /// let gradient = eq.gradient(&[1.0, 2.0]).unwrap(); // at point (1,2)
     /// assert_eq!(gradient, vec![2.0, 4.0]); // [∂/∂x, ∂/∂y] = [2, 2y]
     /// ```
+    ///
+    /// # Errors
+    /// Returns `EquationError::InvalidInputLength` if the length of values doesn't match
+    /// the number of variables.
     pub fn gradient(&self, values: &[f64]) -> Result<Vec<f64>, EquationError> {
         self.validate_input_length(values)?;
         Ok(self
@@ -267,13 +302,13 @@ impl Equation {
             .collect())
     }
 
-    /// Computes the Hessian matrix at the given point.
+    /// Computes the Hessian matrix (all second order partial derivatives) at the given point.
     ///
     /// # Arguments
     /// * `values` - Array of f64 values corresponding to variables in order
     ///
     /// # Returns
-    /// Matrix of second order partial derivatives in the same order as variables
+    /// * `Result<Vec<Vec<f64>>, EquationError>` - Matrix of second order derivatives in variable order
     ///
     /// # Example
     /// ```
@@ -281,7 +316,13 @@ impl Equation {
     /// let eq = Equation::new("2*x + y^2".to_string()).unwrap();
     /// let hessian = eq.hessian(&[1.0, 2.0]).unwrap(); // at point (1,2)
     /// assert_eq!(hessian, vec![vec![0.0, 0.0], vec![0.0, 2.0]]);
+    /// // [[∂²/∂x², ∂²/∂x∂y],
+    /// //  [∂²/∂y∂x, ∂²/∂y²]]
     /// ```
+    ///
+    /// # Errors
+    /// Returns `EquationError::InvalidInputLength` if the length of values doesn't match
+    /// the number of variables.
     pub fn hessian(&self, values: &[f64]) -> Result<Vec<Vec<f64>>, EquationError> {
         self.validate_input_length(values)?;
         Ok(self
@@ -293,16 +334,15 @@ impl Equation {
 
     /// Returns the derivative function for a specific variable.
     ///
-    /// Please note, the returned function is a pointer to the compiled function,
-    /// so it will be invalidated if the equation is modified. Also, since the function
-    /// accepts a pointer to the input values, the array of input values must not be modified
-    /// after the function is created. Otherwise, this will lead to undefined behavior.
+    /// The returned function is a pointer to the compiled function. It will be invalidated
+    /// if the equation is modified. The input array must not be modified while the function
+    /// executes to avoid undefined behavior.
     ///
     /// # Arguments
     /// * `variable` - Name of the variable to get derivative for
     ///
     /// # Returns
-    /// * `Result<&fn(*const f64) -> f64, EquationError>` - The derivative function or an error if variable not found
+    /// * `Result<&JITFunction, EquationError>` - The derivative function or an error if variable not found
     ///
     /// # Example
     /// ```
@@ -313,6 +353,9 @@ impl Equation {
     /// let result = dx(&values); // evaluate ∂/∂x at (1,2)
     /// assert_eq!(result, 2.0);
     /// ```
+    ///
+    /// # Errors
+    /// Returns `EquationError::DerivativeNotFound` if the variable is not found.
     pub fn derivative(&self, variable: &str) -> Result<&JITFunction, EquationError> {
         self.derivatives_first_order
             .get(variable)
@@ -321,16 +364,15 @@ impl Equation {
 
     /// Computes the higher-order partial derivative of the function with respect to multiple variables.
     ///
-    /// Please note, the returned function is a pointer to the compiled function,
-    /// so it will be invalidated if the equation is modified. Also, since the function
-    /// accepts a pointer to the input values, the array of input values must not be modified
-    /// after the function is created. Otherwise, this will lead to undefined behavior.
+    /// The returned function is a pointer to the compiled function. It will be invalidated
+    /// if the equation is modified. The input array must not be modified while the function
+    /// executes to avoid undefined behavior.
     ///
     /// # Arguments
     /// * `variables` - Slice of variable names to differentiate with respect to, in order
     ///
     /// # Returns
-    /// * `Result<fn(*const f64) -> f64, EquationError>` - Returns a compiled function for the partial derivative
+    /// * `Result<JITFunction, EquationError>` - Returns a compiled function for the partial derivative
     ///
     /// # Example
     /// ```
@@ -341,6 +383,9 @@ impl Equation {
     /// let result = dxdy(&values); // evaluate ∂²/∂x∂y at (2,3)
     /// assert_eq!(result, 24.0); // ∂²/∂x∂y(x^2 * y^2) = 4xy
     /// ```
+    ///
+    /// # Errors
+    /// Returns `EquationError::DerivativeNotFound` if any variable is not found.
     pub fn derive_wrt(&self, variables: &[&str]) -> Result<JITFunction, EquationError> {
         // Check if the variables are in the equation
         let mut non_defined_variables = HashSet::new();
@@ -388,9 +433,13 @@ impl Equation {
     /// let eq = Equation::new("x^2 + y^2 + z^2".to_string()).unwrap();
     /// let derivatives = eq.derive_wrt_stack(&["x", "y"]).unwrap();
     /// let values = vec![2.0, 3.0, 4.0];
-    /// let results = derivatives(&values); // evaluate [∂/∂x, ∂/∂y] at (2,3,4)
+    /// let mut results = vec![0.0, 0.0];
+    /// derivatives(&values, &mut results); // evaluate [∂/∂x, ∂/∂y] at (2,3,4)
     /// assert_eq!(results, vec![4.0, 6.0]); // [2x, 2y]
     /// ```
+    ///
+    /// # Errors
+    /// Returns `EquationError::DerivativeNotFound` if any variable is not found.
     pub fn derive_wrt_stack(
         &self,
         variables: &[&str],
@@ -519,6 +568,20 @@ fn extract_symbols_from_node(node: &Node, symbols: &mut HashSet<String>) {
     }
 }
 
+impl Clone for Equation {
+    fn clone(&self) -> Self {
+        Self {
+            equation_str: self.equation_str.clone(),
+            ast: self.ast.clone(),
+            fun: Arc::clone(&self.fun),
+            derivatives_first_order: self.derivatives_first_order.clone(),
+            derivatives_second_order: self.derivatives_second_order.clone(),
+            variables: self.variables.clone(),
+            sorted_variables: self.sorted_variables.clone(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -604,7 +667,8 @@ mod tests {
         // Test getting derivatives with respect to [x, z] (skipping y)
         let derivatives = eq.derive_wrt_stack(&["x", "z"]).unwrap();
         let values = vec![2.0, 3.0, 2.0]; // [x, y, z]
-        let results = derivatives(&values);
+        let mut results = vec![0.0, 0.0];
+        derivatives(&values, &mut results);
 
         // ∂/∂x = 2x + 2y = 2(2) + 2(3) = 10
         // ∂/∂z = 3z^2 = 3(2^2) = 12
@@ -612,7 +676,8 @@ mod tests {
 
         // Test different order [z, x] to verify order matters
         let derivatives = eq.derive_wrt_stack(&["z", "x"]).unwrap();
-        let results = derivatives(&values);
+        let mut results = vec![0.0, 0.0];
+        derivatives(&values, &mut results);
         assert_eq!(results, vec![12.0, 10.0]);
     }
 }
