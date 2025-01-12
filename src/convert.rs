@@ -1,11 +1,12 @@
-//! Conversion module for transforming evalexpr AST nodes into our internal expression representation.
+//! Converts evalexpr AST nodes into our internal expression representation for JIT compilation.
 //!
-//! This module handles converting the AST nodes from the evalexpr crate into our own
-//! expression types that support JIT compilation and automatic differentiation. It maps
-//! variables, operators, and function calls into our internal representation.
+//! This module transforms the AST nodes from evalexpr into our own expression types that support:
+//! - JIT compilation to native machine code
+//! - Automatic differentiation for gradients and Hessians
+//! - Efficient evaluation using Cranelift
 //!
-//! The main entry point is the `build_ast` function which recursively traverses the
-//! evalexpr AST and builds up our expression tree.
+//! The main entry point is `build_ast()` which recursively converts an evalexpr AST into our format.
+//! The conversion preserves the mathematical structure while adding the ability to compile to native code.
 
 use std::collections::HashMap;
 
@@ -16,24 +17,37 @@ use crate::{
 use cranelift::prelude::*;
 use evalexpr::{Node, Operator};
 
-/// Converts an evalexpr AST node into our internal expression representation.
+/// Converts an evalexpr AST node into our JIT-compilable expression format.
 ///
-/// This function recursively traverses the evalexpr AST and builds up our own AST
-/// representation that can be used for JIT compilation and symbolic differentiation.
+/// Recursively traverses the evalexpr AST and builds an equivalent expression tree that can be:
+/// - JIT compiled to native machine code
+/// - Symbolically differentiated for gradients
+/// - Efficiently evaluated at runtime
 ///
 /// # Arguments
 /// * `node` - The evalexpr AST node to convert
-/// * `var_map` - A mapping of variable names to their indices in the input array
+/// * `var_map` - Maps variable names to their indices in the input array
 ///
 /// # Returns
-/// * `Result<Expr, ConvertError>` - The converted expression or an error if conversion fails
+/// * `Result<Expr, ConvertError>` - The converted expression or an error
 ///
-/// # Examples of supported operations:
-/// * Basic arithmetic: +, -, *, /
-/// * Variables: x, y, etc.
-/// * Constants: floating point numbers
-/// * Functions: abs()
-/// * Exponentiation: x^n where n is an integer constant
+/// # Supported Operations
+/// - Arithmetic: +, -, *, /
+/// - Variables: x, y, etc mapped to array indices
+/// - Constants: Floating point numbers
+/// - Functions: abs(), ln(), log(), sqrt(), exp()
+/// - Exponentiation: x^n where n is an integer constant
+/// - Unary negation: -x
+///
+/// # Example
+/// ```ignore
+/// let node = build_operator_tree("2*x + y^2")?;
+/// let var_map = HashMap::from([
+///     ("x".to_string(), 0),
+///     ("y".to_string(), 1),
+/// ]);
+/// let expr = build_ast(&node, &var_map)?;
+/// ```
 pub fn build_ast(node: &Node, var_map: &HashMap<String, u32>) -> Result<Expr, ConvertError> {
     match node.operator() {
         // Addition operator - combines multiple children into a series of binary Add expressions
