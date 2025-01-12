@@ -18,6 +18,15 @@ thiserror = "2.0.9"
 target-lexicon = "0.13.1"
 colored = "3.0.0"
 itertools = "0.14.0"
+rayon = "1.10.0"
 
 [dev-dependencies]
+fasteval = "0.2.4"
+nalgebra = "0.33.2"
+num_cpus = "1.16.0"
 ode_solvers = "0.5.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
