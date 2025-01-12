@@ -1,16 +1,31 @@
 //! This example demonstrates how evalexpr-jit can be used to efficiently simulate chemical kinetics.
-//! Specifically, it shows how to:
-//! 1. Create a JIT-compiled rate equation using evalexpr-jit's Equation type
-//! 2. Integrate that equation into an ODE solver (dopri5 from ode_solvers)
-//! 3. Simulate Michaelis-Menten enzyme kinetics as a practical example
 //!
-//! The Michaelis-Menten model describes the rate of enzyme-catalyzed reactions:
+//! # Overview
+//! The example shows how to:
+//! - Create a JIT-compiled rate equation using evalexpr-jit's Equation type
+//! - Integrate equations with an ODE solver (dopri5 from ode_solvers)
+//! - Simulate Michaelis-Menten enzyme kinetics
+//!
+//! # Chemical System
+//! The Michaelis-Menten model describes enzyme-catalyzed reactions:
+//! ```text
+//! E + S <-> ES -> E + P
+//! ```
+//!
+//! The rate equation is:
+//! ```text
 //! v = Vmax * [S] / (Km + [S])
+//! ```
 //! where:
-//! - v is the reaction rate
-//! - Vmax is the maximum reaction velocity
-//! - [S] is the substrate concentration
-//! - Km is the Michaelis constant
+//! - v is reaction rate
+//! - Vmax is maximum velocity
+//! - [S] is substrate concentration
+//! - Km is Michaelis constant
+//!
+//! # Implementation Details
+//! - Uses JIT compilation for efficient rate equation evaluation
+//! - Employs Dormand-Prince (DOPRI5) adaptive step-size integrator
+//! - Tracks substrate and product concentrations over time
 
 use std::collections::HashMap;
 
@@ -24,7 +39,7 @@ use ode_solvers::*;
 type State = Vector2<f64>;
 type Precision = f64;
 
-/// Represents the Michaelis-Menten enzyme kinetics system
+/// Represents a chemical system following Michaelis-Menten enzyme kinetics
 struct MichaelisMenten {
     vmax: f64,          // Maximum reaction velocity (mM/s)
     km: f64,            // Michaelis constant (mM)
@@ -32,11 +47,14 @@ struct MichaelisMenten {
 }
 
 impl MichaelisMenten {
-    /// Creates a new instance of the Michaelis-Menten system with given parameters
+    /// Creates a new instance of the Michaelis-Menten system with specified kinetic parameters
     ///
     /// # Arguments
-    /// * `vmax` - Maximum reaction velocity in mM/s
-    /// * `km` - Michaelis constant in mM
+    /// * `vmax` - Maximum reaction velocity in concentration/time (mM/s)
+    /// * `km` - Michaelis constant in concentration units (mM)
+    ///
+    /// # Returns
+    /// A new MichaelisMenten instance with JIT-compiled rate equation
     fn new(vmax: f64, km: f64) -> Self {
         // Create a variable mapping for the JIT compiler
         // This maps variable names to their positions in the input array
@@ -60,9 +78,13 @@ impl System<Precision, State> for MichaelisMenten {
     /// Computes the time derivatives for the system state
     ///
     /// # Arguments
-    /// * `_t` - Current time (unused in this autonomous system)
-    /// * `y` - Current state vector ([S], [P])
-    /// * `dy` - Output vector for derivatives (d[S]/dt, d[P]/dt)
+    /// * `_t` - Current time point (unused in autonomous system)
+    /// * `y` - Current state vector containing [S] and [P] concentrations
+    /// * `dy` - Output vector for derivatives d[S]/dt and d[P]/dt
+    ///
+    /// # Details
+    /// Evaluates the JIT-compiled Michaelis-Menten rate equation to determine
+    /// the rate of substrate consumption and product formation
     fn system(&self, _t: f64, y: &State, dy: &mut State) {
         // Evaluate the JIT-compiled rate equation with current values
         let v = self
