@@ -1,15 +1,15 @@
 //! JIT-compiled mathematical expression evaluator with automatic differentiation.
 //!
 //! This crate provides JIT compilation and automatic differentiation for mathematical expressions.
-//! It builds on top of the [evalexpr](https://github.com/ISibboI/evalexpr) crate for parsing and
-//! uses [Cranelift](https://github.com/bytecodealliance/wasmtime/tree/main/cranelift) for JIT compilation.
+//! It parses expressions using [evalexpr](https://github.com/ISibboI/evalexpr) and compiles them to
+//! native machine code using [Cranelift](https://github.com/bytecodealliance/wasmtime/tree/main/cranelift).
 //!
 //! # Features
 //!
-//! - JIT compilation for fast expression evaluation
-//! - Automatic differentiation up to second order
-//! - Support for multiple variables
-//! - Type-safe Rust implementation
+//! - Fast evaluation through JIT compilation to native code
+//! - Automatic differentiation for gradients and Hessians
+//! - Support for variables, constants, and mathematical functions
+//! - Safe Rust implementation with comprehensive error handling
 //!
 //! # Example
 //!
@@ -27,6 +27,7 @@
 //! ```
 
 pub use equation::Equation;
+pub use expr::Expr;
 pub use system::EquationSystem;
 
 pub mod prelude {
@@ -38,19 +39,21 @@ pub mod prelude {
 
 /// JIT compilation functionality using Cranelift
 pub mod builder;
-/// Conversion from parsed expressions to internal AST
+/// Conversion from evalexpr AST to internal expression format
 pub mod convert;
-/// High-level equation handling
+/// High-level equation handling and evaluation
 pub mod equation;
-/// Error types for the various failure modes
+/// Error types for parsing, compilation and evaluation
 pub mod errors;
 /// Expression tree representation and symbolic differentiation
 pub mod expr;
-/// System of equations
+/// System of multiple equations
 pub mod system;
-/// Functions for linking external functions to the expression tree
+/// Functions for linking external mathematical operations
 pub(crate) mod operators {
     pub(crate) mod exp;
     pub(crate) mod ln;
     pub(crate) mod sqrt;
 }
+/// Type definitions for JIT-compiled functions
+pub mod types;
