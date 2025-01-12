@@ -10,6 +10,8 @@
 //! - JIT compiled into machine code using Cranelift
 //! - Symbolically differentiated to compute derivatives
 //! - Evaluated efficiently at runtime
+//! - Simplified using algebraic rules
+//! - Modified by inserting replacement expressions
 //!
 //! Supported operations include:
 //! - Basic arithmetic (+, -, *, /)
@@ -42,6 +44,12 @@
 //! - Exponent rules (e.g. x^0 → 1, x^1 → x)
 //! - Expression caching for repeated subexpressions
 //! - Special function simplifications
+//!
+//! # Expression Modification
+//! The insert method allows replacing parts of an expression tree by:
+//! - Matching nodes using a predicate function
+//! - Replacing matched nodes with a new expression
+//! - Recursively traversing and rebuilding the tree
 
 use cranelift::prelude::*;
 use cranelift_codegen::ir::{immediates::Offset32, Value};
@@ -67,6 +75,8 @@ pub struct VarRef {
 /// This enum represents different types of mathematical expressions that can be:
 /// - JIT compiled into machine code using Cranelift
 /// - Symbolically differentiated to compute derivatives
+/// - Simplified using algebraic rules
+/// - Modified by inserting replacement expressions
 ///
 /// The expression tree is built recursively using Box<Expr> for nested expressions.
 #[derive(Debug, Clone, PartialEq)]
@@ -95,7 +105,7 @@ pub enum Expr {
     Sqrt(Box<Expr>),
     /// Negation of an expression
     Neg(Box<Expr>),
-    /// Cached expression
+    /// Cached expression with optional pre-computed value
     Cached(Box<Expr>, Option<f64>),
 }
 
@@ -111,6 +121,9 @@ impl Expr {
     ///
     /// # Returns
     /// A Cranelift Value representing the result of this expression
+    ///
+    /// # Errors
+    /// Returns an EquationError if code generation fails
     pub fn codegen(
         &self,
         builder: &mut FunctionBuilder,
@@ -529,11 +542,17 @@ impl Expr {
     }
 
     /// Inserts an expression by replacing nodes that match a predicate.
-    /// Returns a new expression tree with the replacements applied.
+    ///
+    /// Recursively traverses the expression tree and replaces any nodes that match
+    /// the given predicate with the replacement expression. This allows for targeted
+    /// modifications of the expression tree.
     ///
     /// # Arguments
     /// * `predicate` - A closure that determines which nodes to replace
     /// * `replacement` - The expression to insert where the predicate matches
+    ///
+    /// # Returns
+    /// A new expression tree with the replacements applied
     pub fn insert<F>(&self, predicate: F, replacement: &Expr) -> Box<Expr>
     where
         F: Fn(&Expr) -> bool + Clone,
