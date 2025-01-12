@@ -73,7 +73,7 @@ pub enum EquationError {
     /// Error when parsing the initial expression string with evalexpr
     #[error("Failed to build Evalexpr AST")]
     BuildEvalexprError(#[from] EvalexprError<DefaultNumericTypes>),
-    /// Error when converting from evalexpr AST to our internal AST
+    /// Error when converting from evalexpr AST to our internal JIT-compatible AST representation
     #[error("Failed to build JIT AST")]
     BuildJITError(#[from] ConvertError),
     /// Error when JIT compiling the expression
@@ -88,4 +88,7 @@ pub enum EquationError {
     /// Error when a variable is not found in the equation
     #[error("Variable not found in equation: {0}")]
     VariableNotFound(String),
+    /// Error when the output length is not the same as the number of equations
+    #[error("Invalid output length: expected {expected}, got {got}")]
+    InvalidOutputLength { expected: usize, got: usize },
 }
