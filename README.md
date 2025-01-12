@@ -201,6 +201,8 @@ For evaluating systems of equations:
 - `new(expressions: Vec<String>) -> Result<Self, EquationError>`
 - `from_var_map(expressions: Vec<String>, variable_map: &HashMap<String, u32>) -> Result<Self, EquationError>`
 - `eval(&self, inputs: &[f64]) -> Result<Vec<f64>, EquationError>`
+- `eval_into(&self, inputs: &[f64], output: &mut [f64]) -> Result<(), EquationError>`
+- `eval_parallel(&self, input_sets: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, EquationError>`
 - `gradient(&self, inputs: &[f64], variable: &str) -> Result<Vec<f64>, EquationError>`
 - `jacobian(&self, inputs: &[f64]) -> Result<Vec<Vec<f64>>, EquationError>`
 - `derive_wrt(&self, variables: &[&str]) -> Result<CombinedJITFunction, EquationError>`
