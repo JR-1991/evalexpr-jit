@@ -10,6 +10,9 @@
 //! - Consistent variable ordering across equations
 //! - Automatic variable extraction and mapping
 //! - Efficient batch evaluation
+//! - Automatic derivative computation and Jacobian matrix generation
+//! - Higher-order derivative support
+//! - Parallel evaluation capabilities
 //!
 //! # Example
 //!
@@ -24,16 +27,23 @@
 //! // Variables are automatically sorted (x, y, z)
 //! let results = system.eval(&[1.0, 2.0, 3.0]).unwrap();
 //! assert_eq!(results, vec![4.0, 4.0]); // [2*1 + 2, 1^2 + 3]
+//!
+//! // Compute derivatives
+//! let dx = system.gradient(&[1.0, 2.0, 3.0], "x").unwrap();
+//! assert_eq!(dx, vec![2.0, 2.0]); // [d/dx(2x + y), d/dx(x^2 + z)]
 //! ```
 
 use crate::builder::build_combined_function;
 use crate::convert::build_ast;
-use crate::equation::{extract_all_symbols, extract_symbols, CombinedJITFunction};
+use crate::equation::{extract_all_symbols, extract_symbols};
 use crate::errors::EquationError;
 use crate::expr::Expr;
+use crate::types::CombinedJITFunction;
 use evalexpr::build_operator_tree;
 use itertools::Itertools;
+use rayon::prelude::*;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Represents a system of mathematical equations that can be evaluated together.
 pub struct EquationSystem {
@@ -47,18 +57,22 @@ pub struct EquationSystem {
     pub sorted_variables: Vec<String>,
     /// The JIT-compiled function that evaluates all equations
     pub combined_fun: CombinedJITFunction,
-    /// Jacobian of the system
+    /// Jacobian of the system - maps variable names to their derivative functions
     pub jacobian_funs: HashMap<String, CombinedJITFunction>,
 }
 
 impl EquationSystem {
     /// Creates a new equation system from a vector of expression strings.
     ///
+    /// This constructor automatically extracts variables from the expressions and assigns them indices
+    /// in alphabetical order. The resulting system can evaluate all equations efficiently and compute
+    /// derivatives with respect to any variable.
+    ///
     /// # Arguments
     /// * `expressions` - Vector of mathematical expressions as strings
     ///
     /// # Returns
-    /// A new `EquationSystem` with JIT-compiled evaluation function
+    /// A new `EquationSystem` with JIT-compiled evaluation function and derivative capabilities
     ///
     /// # Example
     /// ```
@@ -67,6 +81,12 @@ impl EquationSystem {
     ///     "2*x + y".to_string(),
     ///     "x^2 + z".to_string()
     /// ]).unwrap();
+    ///
+    /// // Evaluate system
+    /// let results = system.eval(&[1.0, 2.0, 3.0]).unwrap();
+    ///
+    /// // Compute derivatives
+    /// let dx = system.gradient(&[1.0, 2.0, 3.0], "x").unwrap();
     /// ```
     pub fn new(expressions: Vec<String>) -> Result<Self, EquationError> {
         let sorted_variables = extract_all_symbols(&expressions);
@@ -81,12 +101,17 @@ impl EquationSystem {
 
     /// Creates a new equation system from a vector of expressions and a variable map.
     ///
+    /// This constructor allows explicit control over variable ordering by providing a map
+    /// of variable names to their indices. This is useful when you need to ensure specific
+    /// variable ordering or when integrating with other systems that expect variables in
+    /// a particular order.
+    ///
     /// # Arguments
     /// * `expressions` - Vector of mathematical expressions as strings
-    /// * `variable_map` - Map of variable names to their indices
+    /// * `variable_map` - Map of variable names to their indices, defining input order
     ///
     /// # Returns
-    /// A new `EquationSystem` with JIT-compiled evaluation function
+    /// A new `EquationSystem` with JIT-compiled evaluation function using the specified variable ordering
     ///
     /// # Example
     /// ```
@@ -112,13 +137,16 @@ impl EquationSystem {
 
     /// Core builder function used by both `new()` and `from_var_map()`.
     ///
+    /// This internal function handles the common construction logic for both public constructors.
+    /// It parses expressions, validates variables, builds ASTs, and creates JIT-compiled functions
+    /// for both evaluation and derivatives.
+    ///
     /// # Arguments
     /// * `expressions` - Original expression strings
-    /// * `asts` - Parsed and validated ASTs
     /// * `variable_map` - Map of variable names to indices
     ///
     /// # Returns
-    /// A new `EquationSystem` with JIT-compiled evaluation function
+    /// A new `EquationSystem` with JIT-compiled evaluation function and derivative capabilities
     fn build(
         expressions: Vec<String>,
         variable_map: HashMap<String, u32>,
@@ -174,7 +202,53 @@ impl EquationSystem {
         })
     }
 
+    /// Evaluates all equations in the system with the given input values
+    /// into a pre-allocated buffer. This should be more efficient than
+    /// calling `eval()` and then copying the results.
+    ///
+    /// # Arguments
+    /// * `inputs` - Slice of input values, must match the number of variables
+    /// * `results` - Pre-allocated buffer to store results
+    ///
+    /// # Returns
+    /// Reference to the results slice containing the evaluated values
+    ///
+    /// # Errors
+    /// Returns `EquationError::InvalidInputLength` if:
+    /// - The number of inputs doesn't match the number of variables
+    /// - The results buffer size doesn't match the number of equations
+    ///
+    /// # Example
+    /// ```
+    /// # use evalexpr_jit::system::EquationSystem;
+    /// let system = EquationSystem::new(vec![
+    ///     "x + y".to_string(),
+    ///     "x * y".to_string(),
+    /// ]).unwrap();
+    ///
+    /// let mut results = vec![0.0; 2];
+    /// system.eval_into(&[2.0, 3.0], &mut results).unwrap();
+    /// assert_eq!(results, vec![5.0, 6.0]);
+    /// ```
+    pub fn eval_into<'a>(
+        &self,
+        inputs: &[f64],
+        results: &'a mut [f64],
+    ) -> Result<&'a [f64], EquationError> {
+        self.validate_input_length(inputs)?;
+        if results.len() != self.equations.len() {
+            return Err(EquationError::InvalidInputLength {
+                expected: self.equations.len(),
+                got: results.len(),
+            });
+        }
+
+        (self.combined_fun)(inputs, results);
+        Ok(results)
+    }
+
     /// Evaluates all equations in the system with the given input values.
+    /// Allocates a new vector for results.
     ///
     /// # Arguments
     /// * `inputs` - Slice of input values, must match the number of variables
@@ -182,29 +256,89 @@ impl EquationSystem {
     /// # Returns
     /// Vector of results, one for each equation in the system
     ///
-    /// # Errors
-    /// Returns `EquationError::InvalidInputLength` if the number of inputs doesn't match
-    /// the number of variables
+    /// # Example
+    /// ```
+    /// # use evalexpr_jit::system::EquationSystem;
+    /// let system = EquationSystem::new(vec![
+    ///     "x + y".to_string(),
+    ///     "x * y".to_string(),
+    /// ]).unwrap();
+    ///
+    /// let results = system.eval(&[2.0, 3.0]).unwrap();
+    /// assert_eq!(results, vec![5.0, 6.0]);
+    /// ```
     pub fn eval(&self, inputs: &[f64]) -> Result<Vec<f64>, EquationError> {
-        self.validate_input_length(inputs)?;
+        let mut results = vec![0.0; self.equations.len()];
+        self.eval_into(inputs, &mut results)?;
+        Ok(results)
+    }
 
-        Ok((self.combined_fun)(inputs))
+    /// Evaluates the equation system in parallel for multiple input sets using explicit threading.
+    ///
+    /// This method is optimized for batch evaluation of many input sets. It automatically
+    /// determines the optimal chunk size based on available CPU cores and distributes the
+    /// work across multiple threads.
+    ///
+    /// # Arguments
+    /// * `input_sets` - Slice of input vectors, each must match the number of variables
+    ///
+    /// # Returns
+    /// Vector of result vectors, one for each input set
+    ///
+    /// # Example
+    /// ```
+    /// # use evalexpr_jit::system::EquationSystem;
+    /// let system = EquationSystem::new(vec![
+    ///     "x + y".to_string(),
+    ///     "x * y".to_string(),
+    /// ]).unwrap();
+    ///
+    /// let input_sets = vec![
+    ///     vec![1.0, 2.0],
+    ///     vec![3.0, 4.0],
+    ///     vec![5.0, 6.0],
+    /// ];
+    ///
+    /// let results = system.eval_parallel(&input_sets).unwrap();
+    /// ```
+    pub fn eval_parallel(&self, input_sets: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, EquationError> {
+        let num_threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(8);
+
+        let chunk_size = (input_sets.len() / (num_threads * 4)).max(1);
+        let n_equations = self.equations.len();
+
+        let fun = Arc::clone(&self.combined_fun);
+
+        Ok(input_sets
+            .par_chunks(chunk_size)
+            .map(|chunk| {
+                chunk
+                    .iter()
+                    .map(|inputs| {
+                        let mut results = vec![0.0; n_equations];
+                        (fun)(inputs, &mut results);
+                        results
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .flatten()
+            .collect())
     }
 
     /// Returns the gradient of the equation system with respect to a specific variable.
     ///
     /// The gradient contains the partial derivatives of all equations with respect to the given variable,
-    /// evaluated at the provided input values.
+    /// evaluated at the provided input values. This is equivalent to one row of the Jacobian matrix.
     ///
     /// # Arguments
-    /// * `inputs` - Slice of input values at which to evaluate the gradient, must match the number of variables
+    /// * `inputs` - Slice of input values at which to evaluate the gradient
     /// * `variable` - Name of the variable to compute derivatives with respect to
     ///
     /// # Returns
-    /// * `Ok(Vec<f64>)` - Vector containing the partial derivatives of each equation with respect to
-    ///   the specified variable, evaluated at the given input values
-    /// * `Err(EquationError)` - If the number of inputs doesn't match the number of variables,
-    ///   or if the specified variable is not found in the system
+    /// Vector containing the partial derivatives of each equation with respect to
+    /// the specified variable, evaluated at the given input values
     ///
     /// # Example
     /// ```
@@ -219,42 +353,42 @@ impl EquationSystem {
     /// ```
     pub fn gradient(&self, inputs: &[f64], variable: &str) -> Result<Vec<f64>, EquationError> {
         self.validate_input_length(inputs)?;
-
-        Ok((self.jacobian_funs.get(variable).ok_or(
-            EquationError::VariableNotFound(variable.to_string()),
-        )?)(inputs))
+        let n_equations = self.equations.len();
+        let mut results = vec![0.0; n_equations];
+        self.jacobian_funs
+            .get(variable)
+            .ok_or(EquationError::VariableNotFound(variable.to_string()))?(
+            inputs, &mut results
+        );
+        Ok(results)
     }
 
     /// Computes the Jacobian matrix of the equation system at the given input values.
     ///
-    /// The Jacobian matrix contains all first-order partial derivatives of the system,
-    /// where each row corresponds to a variable and each column corresponds to an equation.
-    /// The entry at position (i,j) is the partial derivative of equation j with respect to variable i.
-    ///
-    /// # Dimensions
-    /// * If the system has m equations and n variables, the Jacobian will be an n×m matrix
-    /// * The outer vector has length n (number of variables)
-    /// * Each inner vector has length m (number of equations)
+    /// The Jacobian matrix contains all first-order partial derivatives of the system.
+    /// Each row corresponds to an equation, and each column corresponds to a variable.
+    /// The entry at position (i,j) is the partial derivative of equation i with respect to variable j.
     ///
     /// # Arguments
-    /// * `inputs` - Slice of input values at which to evaluate the Jacobian, must match the number of variables
+    /// * `inputs` - Slice of input values at which to evaluate the Jacobian
+    /// * `variables` - Optional slice of variable names to include in the Jacobian.
+    ///                If None, includes all variables in sorted order.
     ///
     /// # Returns
-    /// * `Ok(Vec<Vec<f64>>)` - The Jacobian matrix as a vector of vectors, where each inner vector
-    ///   contains the partial derivatives with respect to one variable across all equations
-    /// * `Err(EquationError)` - If the number of inputs doesn't match the number of variables
+    /// The Jacobian matrix as a vector of vectors, where each inner vector
+    /// contains the partial derivatives of one equation with respect to all variables
     ///
     /// # Example
     /// ```
     /// # use evalexpr_jit::system::EquationSystem;
     /// let system = EquationSystem::new(vec![
-    ///     "x^2*y".to_string(),
-    ///     "x*y^2".to_string(),
+    ///     "x^2*y".to_string(),  // f1
+    ///     "x*y^2".to_string(),  // f2
     /// ]).unwrap();
     ///
     /// let jacobian = system.jacobian(&[2.0, 3.0], None).unwrap();
-    /// // jacobian[0] contains [6.0, 9.0] (d/dx[x^2*y], d/dx[xy^2])
-    /// // jacobian[1] contains [4.0, 12.0] (d/dy[x^2*y], d/dy[xy^2])
+    /// // jacobian[0] contains [12.0, 4.0]   // ∂f1/∂x, ∂f1/∂y
+    /// // jacobian[1] contains [9.0, 12.0]   // ∂f2/∂x, ∂f2/∂y
     /// ```
     pub fn jacobian(
         &self,
@@ -273,9 +407,11 @@ impl EquationSystem {
         }
 
         // Fill the transposed matrix
+        let n_equations = self.equations.len();
         for var in sorted_variables {
             let fun = self.jacobian_funs.get(var).unwrap();
-            let derivatives = fun(inputs);
+            let mut derivatives = vec![0.0; n_equations];
+            fun(inputs, &mut derivatives);
             for (eq_idx, &value) in derivatives.iter().enumerate() {
                 results[eq_idx].push(value);
             }
@@ -287,23 +423,28 @@ impl EquationSystem {
     /// Creates a new equation system containing the higher-order derivatives of all equations
     /// with respect to multiple variables.
     ///
+    /// This method allows computing mixed partial derivatives by specifying the variables
+    /// in the order of differentiation. For example, passing ["x", "y"] computes ∂²f/∂x∂y
+    /// for each equation f.
+    ///
     /// # Arguments
     /// * `variables` - Slice of variable names to differentiate with respect to, in order
     ///
     /// # Returns
-    /// A new `EquationSystem` containing the higher-order derivatives of all equations
+    /// A JIT-compiled function that computes the higher-order derivatives
     ///
     /// # Example
     /// ```
     /// # use evalexpr_jit::system::EquationSystem;
     /// let system = EquationSystem::new(vec![
-    ///     "x^2*y".to_string(),
-    ///     "x*y^2".to_string(),
+    ///     "x^2*y".to_string(),  // f1
+    ///     "x*y^2".to_string(),  // f2
     /// ]).unwrap();
     ///
     /// let derivatives = system.derive_wrt(&["x", "y"]).unwrap();
-    /// let results = derivatives(&[2.0, 3.0]);
-    /// assert_eq!(results, vec![4.0, 6.0]); // d²/dxdy[x^2*y] = 2x, d²/dxdy[x*y^2] = 2y
+    /// let mut results = vec![0.0; 2];
+    /// derivatives(&[2.0, 3.0], &mut results);
+    /// assert_eq!(results, vec![4.0, 6.0]); // ∂²f1/∂x∂y = 2x, ∂²f2/∂x∂y = 2y
     /// ```
     pub fn derive_wrt(&self, variables: &[&str]) -> Result<CombinedJITFunction, EquationError> {
         // Verify all variables exist
@@ -326,7 +467,7 @@ impl EquationSystem {
         build_combined_function(derivative_asts.clone(), self.equations.len())
     }
 
-    /// Returns the sorted variables.
+    /// Returns the sorted variables in the system.
     pub fn sorted_variables(&self) -> &[String] {
         &self.sorted_variables
     }
@@ -346,16 +487,22 @@ impl EquationSystem {
         &self.combined_fun
     }
 
-    /// Returns a vector of gradient functions.
+    /// Returns the map of variable names to their derivative functions.
     pub fn jacobian_funs(&self) -> &HashMap<String, CombinedJITFunction> {
         &self.jacobian_funs
     }
 
-    /// Return a specific Jacobian function.
+    /// Returns the derivative function for a specific variable.
     pub fn gradient_fun(&self, variable: &str) -> &CombinedJITFunction {
         self.jacobian_funs.get(variable).unwrap()
     }
 
+    /// Returns the number of equations in the system.
+    pub fn num_equations(&self) -> usize {
+        self.equations.len()
+    }
+
+    /// Validates that the number of input values matches the number of variables.
     fn validate_input_length(&self, inputs: &[f64]) -> Result<(), EquationError> {
         if inputs.len() != self.sorted_variables.len() {
             return Err(EquationError::InvalidInputLength {
@@ -364,6 +511,19 @@ impl EquationSystem {
             });
         }
         Ok(())
+    }
+}
+
+impl Clone for EquationSystem {
+    fn clone(&self) -> Self {
+        Self {
+            equations: self.equations.clone(),
+            asts: self.asts.clone(),
+            variable_map: self.variable_map.clone(),
+            sorted_variables: self.sorted_variables.clone(),
+            combined_fun: Arc::clone(&self.combined_fun),
+            jacobian_funs: self.jacobian_funs.clone(),
+        }
     }
 }
 
@@ -498,12 +658,14 @@ mod tests {
 
         // First order derivative
         let dx = system.derive_wrt(&["x"])?;
-        let dx_results = dx(&[2.0, 3.0]);
+        let mut dx_results = vec![0.0, 0.0];
+        dx(&[2.0, 3.0], &mut dx_results);
         assert_eq!(dx_results, vec![12.0, 9.0]); // d/dx[x^2*y] = 2xy, d/dx[x*y^2] = y^2
 
         // Second order derivative
         let dxy = system.derive_wrt(&["x", "y"])?;
-        let dxy_results = dxy(&[2.0, 3.0]);
+        let mut dxy_results = vec![0.0, 0.0];
+        dxy(&[2.0, 3.0], &mut dxy_results);
         assert_eq!(dxy_results, vec![4.0, 6.0]); // d²/dxdy[x^2*y] = 2x, d²/dxdy[x*y^2] = 2y
 
         Ok(())
