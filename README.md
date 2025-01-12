@@ -141,7 +141,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Compute higher-order derivatives of the system
     let d2 = system.derive_wrt(&["x", "y"])?;
-    let results = d2(&[2.0, 3.0]);
+    let mut results = vec![0.0; 2];
+    d2(&[2.0, 3.0], &mut results);
     assert_eq!(results, vec![
         4.0,  // d²/dxdy[x^2*y] = 2x
         6.0   // d²/dxdy[x*y^2] = 2y
