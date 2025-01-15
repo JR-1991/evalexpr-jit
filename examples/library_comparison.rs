@@ -16,8 +16,8 @@
 
 use colored::Colorize;
 use evalexpr_jit::system::EquationSystem;
+use evalexpr_jit::Equation;
 use fasteval::{Compiler, Evaler};
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::collections::BTreeMap;
 use std::time::Instant;
 
@@ -42,9 +42,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!(
         "\n{}",
+        "=== EvalExpr Single Implementation ==="
+            .bright_green()
+            .bold()
+    );
+    benchmark_evalexpr_single(&expressions, n_runs)?;
+
+    println!(
+        "\n{}",
         "=== EvalExpr JIT Implementation ===".bright_green().bold()
     );
-    benchmark_evalexpr(&expressions, n_runs)?;
+    benchmark_evalexpr_system(&expressions, n_runs)?;
 
     Ok(())
 }
@@ -156,11 +164,9 @@ fn benchmark_fasteval(expressions: &[String], n_runs: usize) -> Result<(), faste
     let start = Instant::now();
 
     for _ in 0..n_runs {
-        compiled_exprs
-            .par_iter()
-            .for_each_with(map.clone(), |map, compiled| {
-                let _val = compiled.eval(&slab, map);
-            });
+        for compiled in &compiled_exprs {
+            let _val = compiled.eval(&slab, &mut map);
+        }
     }
     let duration = start.elapsed();
 
@@ -189,7 +195,58 @@ fn benchmark_fasteval(expressions: &[String], n_runs: usize) -> Result<(), faste
     Ok(())
 }
 
-/// Benchmarks expression evaluation using evalexpr-jit.
+fn benchmark_evalexpr_single(
+    expressions: &[String],
+    n_runs: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let start = Instant::now();
+    let equations: Vec<Equation> = expressions
+        .iter()
+        .map(|e| Equation::new(e.to_string()).unwrap())
+        .collect();
+    let duration_jit = start.elapsed();
+    let duration_str = format!("{:.3}s", duration_jit.as_secs_f64());
+    println!("JIT Compilation: {}", duration_str);
+
+    let start = Instant::now();
+    for i in 0..n_runs {
+        let inputs = &[
+            (i + 1) as f64,
+            (i + 2) as f64,
+            (i + 3) as f64,
+            (i + 4) as f64,
+            (i + 5) as f64,
+        ];
+        for eq in &equations {
+            let _val = eq.eval(inputs).unwrap();
+        }
+    }
+    let duration = start.elapsed();
+    println!(
+        "Single Sequential: {}",
+        format!(
+            "{:?} for {} runs and {} equations",
+            duration,
+            n_runs,
+            expressions.len()
+        )
+        .bright_yellow()
+        .italic()
+    );
+
+    let ns_per_eq =
+        (duration.as_secs_f64() * 1_000_000_000.0) / (n_runs as f64 * expressions.len() as f64);
+    println!(
+        "Single Average: {}",
+        format!("{:.2}ns per equation", ns_per_eq)
+            .bright_cyan()
+            .bold()
+    );
+
+    Ok(())
+}
+
+/// Benchmarks expression evaluation using evalexpr-jit EquationSystem.
 ///
 /// # Arguments
 /// * `expressions` - Vector of mathematical expressions to evaluate
@@ -197,7 +254,7 @@ fn benchmark_fasteval(expressions: &[String], n_runs: usize) -> Result<(), faste
 ///
 /// # Returns
 /// Result indicating success or error
-fn benchmark_evalexpr(
+fn benchmark_evalexpr_system(
     expressions: &[String],
     n_runs: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -213,19 +270,25 @@ fn benchmark_evalexpr(
     );
 
     // Prepare test data
-    let inputs = &[1.0, 2.0, 3.0, 4.0, 5.0];
     let batch_input = (0..n_runs)
         .map(|i| vec![i as f64, i as f64, i as f64, i as f64, i as f64])
         .collect::<Vec<_>>();
 
     // Benchmark sequential evaluation
     let start = Instant::now();
-    for _ in 0..n_runs {
+    for i in 0..n_runs {
+        let inputs = &[
+            (i + 1) as f64,
+            (i + 2) as f64,
+            (i + 3) as f64,
+            (i + 4) as f64,
+            (i + 5) as f64,
+        ];
         let _val = system.eval(inputs).unwrap();
     }
     let duration_system = start.elapsed();
     println!(
-        "Sequential: {}",
+        "System Sequential: {}",
         format!(
             "{:?} for {} runs and {} equations",
             duration_system,
@@ -241,7 +304,7 @@ fn benchmark_evalexpr(
     system.eval_parallel(&batch_input).unwrap();
     let duration_parallel = start.elapsed();
     println!(
-        "Parallel: {}",
+        "System Parallel: {}",
         format!(
             "{:?} for {} runs and {} equations",
             duration_parallel,

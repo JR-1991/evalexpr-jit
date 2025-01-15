@@ -44,7 +44,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let n_equations = 1000;
     let expressions: Vec<String> = (0..n_equations)
         .map(|i| match i % 10 {
-            0 => format!("2*x + y^{}/z + sqrt(z^{}) + w*v", (i % 5) + 2, (i % 3) + 2),
+            0 => format!(
+                "abs(2*x) + y^{}/z + sqrt(z^{}) + w*v",
+                (i % 5) + 2,
+                (i % 3) + 2
+            ),
             1 => format!(
                 "exp(x/{}) + y^{}/sqrt(z) + ln(z+{}*x) + w/v",
                 (i % 4) + 2,
