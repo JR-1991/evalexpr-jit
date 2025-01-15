@@ -148,6 +148,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         6.0   // d²/dxdy[x*y^2] = 2y
     ]);
 
+    // Custom Jacobian
+    let jacobian = system.jacobian_wrt(&["x", "y"])?;
+    let mut results = vec![vec![0.0; 2]; 2];  // Pre-allocate matrix [2 equations × 2 variables]
+    jacobian(&[2.0, 3.0], &mut results);
+    assert_eq!(results, vec![
+        vec![12.0, 4.0],   // [∂f1/∂x = 2xy = 12.0, ∂f1/∂y = x^2 = 4.0]
+        vec![9.0, 12.0],   // [∂f2/∂x = y^2 = 9.0, ∂f2/∂y = 2xy = 12.0]
+    ]);
+
     Ok(())
 }
 ```
@@ -206,6 +215,7 @@ For evaluating systems of equations:
 - `eval_parallel(&self, input_sets: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, EquationError>`
 - `gradient(&self, inputs: &[f64], variable: &str) -> Result<Vec<f64>, EquationError>`
 - `jacobian(&self, inputs: &[f64]) -> Result<Vec<Vec<f64>>, EquationError>`
+- `jacobian_wrt(&self, inputs: &[f64], variables: &[&str]) -> Result<MatrixJITFunction, EquationError>`
 - `derive_wrt(&self, variables: &[&str]) -> Result<CombinedJITFunction, EquationError>`
 
 ## Contributing
