@@ -38,7 +38,7 @@ use crate::convert::build_ast;
 use crate::equation::{extract_all_symbols, extract_symbols};
 use crate::errors::EquationError;
 use crate::expr::Expr;
-use crate::types::CombinedJITFunction;
+use crate::types::{CombinedJITFunction, MatrixJITFunction};
 use evalexpr::build_operator_tree;
 use itertools::Itertools;
 use rayon::prelude::*;
@@ -420,6 +420,88 @@ impl EquationSystem {
         Ok(results)
     }
 
+    /// Creates a JIT-compiled function that computes the Jacobian matrix with respect to specific variables.
+    ///
+    /// This method is optimized for repeated Jacobian evaluations when you only need derivatives
+    /// with respect to a subset of variables. The resulting function computes partial derivatives
+    /// of all equations with respect to the specified variables and arranges them in matrix form.
+    ///
+    /// # Arguments
+    /// * `variables` - Slice of variable names to include in the Jacobian matrix
+    ///
+    /// # Returns
+    /// A JIT-compiled function that takes input values and fills a matrix of partial derivatives.
+    /// The matrix is represented as a slice of vectors, where each row contains the derivatives
+    /// of one equation with respect to the specified variables.
+    ///
+    /// # Errors
+    /// Returns `EquationError::VariableNotFound` if any of the specified variables doesn't exist
+    /// in the system.
+    ///
+    /// # Example
+    /// ```
+    /// # use evalexpr_jit::system::EquationSystem;
+    /// let system = EquationSystem::new(vec![
+    ///     "x^2*y + z".to_string(),    // f1
+    ///     "x*y^2 - z^2".to_string(),  // f2
+    /// ]).unwrap();
+    ///
+    /// // Create Jacobian function for x and y only
+    /// let jacobian_fn = system.jacobian_wrt(&["x", "y"]).unwrap();
+    ///
+    /// // Prepare matrix to store results (2 equations × 2 variables)
+    /// let mut results = vec![vec![0.0; 2]; 2];
+    ///
+    /// // Evaluate Jacobian at point (x=2, y=3, z=1)
+    /// jacobian_fn(&[2.0, 3.0, 1.0], &mut results);
+    ///
+    /// // results now contains:
+    /// // [
+    /// //   [12.0, 4.0],   // [∂f1/∂x, ∂f1/∂y]
+    /// //   [9.0,  12.0],  // [∂f2/∂x, ∂f2/∂y]
+    /// // ]
+    /// ```
+    ///
+    /// # Performance Notes
+    /// - The returned function is JIT-compiled and optimized for repeated evaluations
+    /// - Pre-allocate the results matrix and reuse it for better performance
+    /// - The matrix dimensions will be `[n_equations × n_variables]`
+    pub fn jacobian_wrt(&self, variables: &[&str]) -> Result<MatrixJITFunction, EquationError> {
+        // Verify all variables exist
+        for var in variables {
+            if !self.variable_map.contains_key(*var) {
+                return Err(EquationError::VariableNotFound(var.to_string()));
+            }
+        }
+
+        let mut asts = vec![];
+        for ast in self.asts.iter() {
+            for var in variables {
+                asts.push(ast.derivative(var));
+            }
+        }
+
+        let fun = build_combined_function(asts, self.equations.len() * variables.len())?;
+        let n_vars = variables.len();
+        let n_eqs = self.equations.len();
+
+        // Create wrapper closure that rearranges output to matrix form
+        let wrapped_fun: MatrixJITFunction =
+            Arc::new(move |inputs: &[f64], results: &mut [Vec<f64>]| {
+                let mut temp = vec![0.0; n_vars * n_eqs];
+                fun(inputs, &mut temp);
+
+                // Fill matrix - each row contains derivatives of one equation wrt all variables
+                for eq_idx in 0..n_eqs {
+                    for var_idx in 0..n_vars {
+                        results[eq_idx][var_idx] = temp[eq_idx * n_vars + var_idx];
+                    }
+                }
+            });
+
+        Ok(wrapped_fun)
+    }
+
     /// Creates a new equation system containing the higher-order derivatives of all equations
     /// with respect to multiple variables.
     ///
@@ -696,6 +778,108 @@ mod tests {
         assert_eq!(jacobian.len(), 2); // Two rows (one per equation)
         assert_eq!(jacobian[0], vec![12.0, 4.0]); // Derivatives of first equation
         assert_eq!(jacobian[1], vec![9.0, 12.0]); // Derivatives of second equation
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_jacobian_wrt() -> Result<(), Box<dyn std::error::Error>> {
+        let system = EquationSystem::new(vec![
+            "x^2*y + z".to_string(),   // f1
+            "x*y^2 - z^2".to_string(), // f2
+        ])?;
+
+        // Test subset of variables (x and y only)
+        let jacobian_fn = system.jacobian_wrt(&["x", "y"])?;
+        let mut results = vec![vec![0.0; 2]; 2];
+        jacobian_fn(&[2.0, 3.0, 1.0], &mut results);
+
+        // Expected derivatives:
+        // ∂f1/∂x = 2xy = 2(2)(3) = 12
+        // ∂f1/∂y = x^2 = 4
+        // ∂f2/∂x = y^2 = 9
+        // ∂f2/∂y = 2xy = 2(2)(3) = 12
+        assert_eq!(results[0], vec![12.0, 4.0]); // [∂f1/∂x, ∂f1/∂y]
+        assert_eq!(results[1], vec![9.0, 12.0]); // [∂f2/∂x, ∂f2/∂y]
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_jacobian_wrt_single_variable() -> Result<(), Box<dyn std::error::Error>> {
+        let system = EquationSystem::new(vec![
+            "x^2*y".to_string(), // f1
+            "x*y^2".to_string(), // f2
+        ])?;
+
+        // Test with single variable
+        let jacobian_fn = system.jacobian_wrt(&["x"])?;
+        let mut results = vec![vec![0.0; 1]; 2];
+        jacobian_fn(&[2.0, 3.0], &mut results);
+
+        // Expected derivatives:
+        // ∂f1/∂x = 2xy = 2(2)(3) = 12
+        // ∂f2/∂x = y^2 = 9
+        assert_eq!(results[0], vec![12.0]); // [∂f1/∂x]
+        assert_eq!(results[1], vec![9.0]); // [∂f2/∂x]
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_jacobian_wrt_all_variables() -> Result<(), Box<dyn std::error::Error>> {
+        let system = EquationSystem::new(vec![
+            "x^2*y + z".to_string(),   // f1
+            "x*y^2 - z^2".to_string(), // f2
+        ])?;
+
+        // Test with all variables
+        let jacobian_fn = system.jacobian_wrt(&["x", "y", "z"])?;
+        let mut results = vec![vec![0.0; 3]; 2];
+        jacobian_fn(&[2.0, 3.0, 1.0], &mut results);
+
+        // Expected derivatives:
+        // ∂f1/∂x = 2xy = 2(2)(3) = 12
+        // ∂f1/∂y = x^2 = 4
+        // ∂f1/∂z = 1
+        // ∂f2/∂x = y^2 = 9
+        // ∂f2/∂y = 2xy = 2(2)(3) = 12
+        // ∂f2/∂z = -2z = -2
+        assert_eq!(results[0], vec![12.0, 4.0, 1.0]); // [∂f1/∂x, ∂f1/∂y, ∂f1/∂z]
+        assert_eq!(results[1], vec![9.0, 12.0, -2.0]); // [∂f2/∂x, ∂f2/∂y, ∂f2/∂z]
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_jacobian_wrt_invalid_variable() {
+        let system =
+            EquationSystem::new(vec!["x^2*y + z".to_string(), "x*y^2 - z^2".to_string()]).unwrap();
+
+        // Test with non-existent variable
+        let result = system.jacobian_wrt(&["x", "w"]);
+        assert!(matches!(result, Err(EquationError::VariableNotFound(_))));
+    }
+
+    #[test]
+    fn test_jacobian_wrt_reuse_buffer() -> Result<(), Box<dyn std::error::Error>> {
+        let system = EquationSystem::new(vec![
+            "x^2*y".to_string(), // f1
+            "x*y^2".to_string(), // f2
+        ])?;
+
+        let jacobian_fn = system.jacobian_wrt(&["x", "y"])?;
+        let mut results = vec![vec![0.0; 2]; 2];
+
+        // First evaluation
+        jacobian_fn(&[2.0, 3.0], &mut results);
+        assert_eq!(results[0], vec![12.0, 4.0]);
+        assert_eq!(results[1], vec![9.0, 12.0]);
+
+        // Reuse buffer for second evaluation
+        jacobian_fn(&[1.0, 2.0], &mut results);
+        assert_eq!(results[0], vec![4.0, 1.0]);
+        assert_eq!(results[1], vec![4.0, 4.0]);
 
         Ok(())
     }
