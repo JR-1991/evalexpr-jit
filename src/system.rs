@@ -289,7 +289,7 @@ impl EquationSystem {
     /// Returns `EquationError::VariableNotFound` if an expression uses a variable
     /// that doesn't exist in the variable map
     fn create_asts(
-        expressions: &Vec<String>,
+        expressions: &[String],
         variable_map: &HashMap<String, u32>,
     ) -> Result<Vec<Box<Expr>>, EquationError> {
         expressions
@@ -306,7 +306,7 @@ impl EquationSystem {
                 }
 
                 // Build and simplify AST
-                let ast = build_ast(&node, &variable_map)?;
+                let ast = build_ast(&node, variable_map)?;
                 Ok(ast.simplify())
             })
             .collect::<Result<Vec<_>, EquationError>>()
@@ -394,9 +394,7 @@ impl EquationSystem {
     /// Matrix containing the evaluated results, or an error if the system is not configured for matrix output
     pub fn eval_matrix<V: Vector, R: Matrix>(&self, inputs: &V) -> Result<R, EquationError> {
         match self.output_type {
-            OutputType::Vector => {
-                return Err(EquationError::MatrixOutputRequired);
-            }
+            OutputType::Vector => Err(EquationError::MatrixOutputRequired),
             OutputType::Matrix(n_rows, n_cols) => {
                 let mut results = R::zeros(n_rows, n_cols);
                 self.eval_into_matrix(inputs, &mut results)?;

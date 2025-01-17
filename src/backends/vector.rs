@@ -34,6 +34,11 @@ pub trait Vector {
 
     /// Returns the length of the vector.
     fn len(&self) -> usize;
+
+    /// Checks if the vector is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// Implementation of Vector trait for standard Vec<f64>.
