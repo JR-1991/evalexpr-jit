@@ -181,3 +181,99 @@ pub fn build_ast(node: &Node, var_map: &HashMap<String, u32>) -> Result<Expr, Co
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evalexpr::build_operator_tree;
+
+    fn make_var_map() -> HashMap<String, u32> {
+        HashMap::from([
+            ("x".to_string(), 0),
+            ("y".to_string(), 1),
+            ("z".to_string(), 2),
+        ])
+    }
+
+    #[test]
+    fn test_basic_arithmetic() {
+        let var_map = make_var_map();
+
+        // Test addition
+        let node = build_operator_tree("2 + x").unwrap();
+        let expr = build_ast(&node, &var_map).unwrap();
+        assert!(matches!(
+            expr,
+            Expr::Add(ref a, ref b) if matches!(**a, Expr::Const(2.0)) && matches!(**b, Expr::Var(_))
+        ));
+
+        // Test multiplication
+        let node = build_operator_tree("3 * y").unwrap();
+        let expr = build_ast(&node, &var_map).unwrap();
+        assert!(matches!(
+            expr,
+            Expr::Mul(ref a, ref b) if matches!(**a, Expr::Const(3.0)) && matches!(**b, Expr::Var(_))
+        ));
+
+        // Test complex expression
+        let node = build_operator_tree("2*x + y/z - 5").unwrap();
+        let expr = build_ast(&node, &var_map).unwrap();
+        assert!(matches!(expr, Expr::Sub(_, ref b) if matches!(**b, Expr::Const(5.0))));
+    }
+
+    #[test]
+    fn test_functions() {
+        let var_map = make_var_map();
+
+        // Test abs
+        let node = build_operator_tree("abs(x)").unwrap();
+        let expr = build_ast(&node, &var_map).unwrap();
+        assert!(matches!(expr, Expr::Abs(ref a) if matches!(**a, Expr::Var(_))));
+
+        // Test ln
+        let node = build_operator_tree("ln(y)").unwrap();
+        let expr = build_ast(&node, &var_map).unwrap();
+        assert!(matches!(expr, Expr::Ln(ref a) if matches!(**a, Expr::Var(_))));
+
+        // Test sqrt
+        let node = build_operator_tree("sqrt(z)").unwrap();
+        let expr = build_ast(&node, &var_map).unwrap();
+        assert!(matches!(expr, Expr::Sqrt(ref a) if matches!(**a, Expr::Var(_))));
+    }
+
+    #[test]
+    fn test_exponentiation() {
+        let var_map = make_var_map();
+
+        // Test integer power
+        let node = build_operator_tree("x^2").unwrap();
+        let expr = build_ast(&node, &var_map).unwrap();
+        assert!(matches!(expr, Expr::Pow(ref a, 2) if matches!(**a, Expr::Var(_))));
+    }
+
+    #[test]
+    fn test_errors() {
+        let var_map = make_var_map();
+
+        // Test undefined variable
+        let node = build_operator_tree("w + 1").unwrap();
+        assert!(matches!(
+            build_ast(&node, &var_map),
+            Err(ConvertError::VariableNotFound(_))
+        ));
+
+        // Test unsupported function
+        let node = build_operator_tree("sin(x)").unwrap();
+        assert!(matches!(
+            build_ast(&node, &var_map),
+            Err(ConvertError::UnsupportedFunction(_))
+        ));
+
+        // Test non-integer exponent
+        let node = build_operator_tree("x^2.5").unwrap();
+        assert!(matches!(
+            build_ast(&node, &var_map),
+            Err(ConvertError::ExpOperator(_))
+        ));
+    }
+}
