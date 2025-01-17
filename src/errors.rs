@@ -91,4 +91,15 @@ pub enum EquationError {
     /// Error when the output length is not the same as the number of equations
     #[error("Invalid output length: expected {expected}, got {got}")]
     InvalidOutputLength { expected: usize, got: usize },
+    /// Error when the output type is wrong
+    #[error("Matrix output required: Got vector output for this system")]
+    MatrixOutputRequired,
+    /// Error when the matrix dimensions are invalid
+    #[error("Invalid matrix dimensions: expected {expected_rows}x{expected_cols}, got {got_rows}x{got_cols}")]
+    InvalidMatrixDimensions {
+        expected_rows: usize,
+        expected_cols: usize,
+        got_rows: usize,
+        got_cols: usize,
+    },
 }
