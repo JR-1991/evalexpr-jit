@@ -212,7 +212,7 @@ impl EquationSystem {
     /// * `output_type` - The type of output. Used to determine the shape of the output vector
     /// # Returns
     /// A new `EquationSystem` with JIT-compiled evaluation function using the specified ASTs
-    fn from_asts(
+    pub(crate) fn from_asts(
         asts: Vec<Box<Expr>>,
         variable_map: &HashMap<String, u32>,
         output_type: OutputType,
@@ -736,7 +736,7 @@ impl Clone for EquationSystem {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum OutputType {
+pub(crate) enum OutputType {
     Vector,
     Matrix(usize, usize),
 }
@@ -924,7 +924,7 @@ mod tests {
         ])?;
 
         // Test subset of variables (x and y only)
-        let jacobian_fn = system.jacobian_wrt(&["x", "y"])?;
+        let jacobian_fn = system.jacobian_wrt(&["x", "y"]).unwrap();
         let mut results = Array2::zeros((2, 2));
         jacobian_fn
             .eval_into_matrix(&vec![2.0, 3.0, 1.0], &mut results)
@@ -1120,6 +1120,97 @@ mod tests {
             system.eval_matrix::<_, Array2<f64>>(&vec![2.0, 3.0]),
             Err(EquationError::MatrixOutputRequired)
         ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gradient() -> Result<(), Box<dyn std::error::Error>> {
+        let system = EquationSystem::new(vec![
+            "x^2*y + z".to_string(),   // f1
+            "x*y^2 - z^2".to_string(), // f2
+        ])?;
+
+        // Test gradient with respect to x
+        let dx = system.gradient(&[2.0, 3.0, 1.0], "x")?;
+        assert_eq!(dx, vec![12.0, 9.0]); // [∂f1/∂x = 2xy, ∂f2/∂x = y^2]
+
+        // Test gradient with respect to y
+        let dy = system.gradient(&[2.0, 3.0, 1.0], "y")?;
+        assert_eq!(dy, vec![4.0, 12.0]); // [∂f1/∂y = x^2, ∂f2/∂y = 2xy]
+
+        // Test gradient with respect to z
+        let dz = system.gradient(&[2.0, 3.0, 1.0], "z")?;
+        assert_eq!(dz, vec![1.0, -2.0]); // [∂f1/∂z = 1, ∂f2/∂z = -2z]
+
+        // Test error case: invalid variable
+        let result = system.gradient(&[2.0, 3.0, 1.0], "w");
+        assert!(matches!(result, Err(EquationError::VariableNotFound(_))));
+
+        // Test error case: wrong input length
+        let result = system.gradient(&[2.0, 3.0], "x");
+        assert!(matches!(
+            result,
+            Err(EquationError::InvalidInputLength { .. })
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_eval_matrix_on_vector_system() -> Result<(), Box<dyn std::error::Error>> {
+        let system = EquationSystem::new(vec!["x^2*y".to_string(), "x*y^2".to_string()])?;
+
+        // Attempt to evaluate as matrix should fail
+        let mut results = Array2::zeros((2, 2));
+        assert!(matches!(
+            system.eval_into_matrix(&vec![2.0, 3.0], &mut results),
+            Err(EquationError::MatrixOutputRequired)
+        ));
+
+        // Direct matrix evaluation should also fail
+        assert!(matches!(
+            system.eval_matrix::<_, Array2<f64>>(&vec![2.0, 3.0]),
+            Err(EquationError::MatrixOutputRequired)
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_getters() -> Result<(), Box<dyn std::error::Error>> {
+        let system = EquationSystem::new(vec!["x^2*y".to_string(), "x*y^2".to_string()])?;
+
+        // Test sorted_variables()
+        assert_eq!(system.sorted_variables(), &["x", "y"]);
+
+        // Test variables()
+        let var_map = system.variables();
+        assert_eq!(var_map.get("x"), Some(&0));
+        assert_eq!(var_map.get("y"), Some(&1));
+
+        // Test equations()
+        assert_eq!(system.equations(), &["x^2*y", "x*y^2"]);
+
+        // Test fun() returns a valid function
+        let fun = system.fun();
+        let mut results = vec![0.0; 2];
+        fun(&[2.0, 3.0], &mut results);
+        assert_eq!(results, vec![12.0, 18.0]);
+
+        // Test jacobian_funs() returns valid derivative functions
+        let jacobian_funs = system.jacobian_funs();
+        assert!(jacobian_funs.contains_key("x"));
+        assert!(jacobian_funs.contains_key("y"));
+
+        // Test gradient_fun() returns valid derivative function
+        let dx_fun = system.gradient_fun("x");
+        let mut dx_results = vec![0.0; 2];
+        dx_fun(&[2.0, 3.0], &mut dx_results);
+        assert_eq!(dx_results, vec![12.0, 9.0]); // [∂(x^2*y)/∂x, ∂(x*y^2)/∂x]
+
+        // Test num_equations()
+        assert_eq!(system.num_equations(), 2);
 
         Ok(())
     }
