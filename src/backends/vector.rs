@@ -87,6 +87,7 @@ impl Vector for Vec<f64> {
 /// slice[0] = 1.0;
 /// assert!(std::ptr::eq(slice, vec.as_slice().unwrap()));
 /// ```
+#[cfg(feature = "ndarray")]
 impl Vector for ndarray::Array1<f64> {
     fn as_slice(&self) -> &[f64] {
         self.as_slice().unwrap()
@@ -122,6 +123,7 @@ impl Vector for ndarray::Array1<f64> {
 /// slice[0] = 1.0;
 /// assert!(std::ptr::eq(slice, vec.as_slice()));
 /// ```
+#[cfg(feature = "nalgebra")]
 impl Vector for nalgebra::DVector<f64> {
     fn as_slice(&self) -> &[f64] {
         self.as_slice()

@@ -79,6 +79,7 @@ pub trait Matrix {
 /// slice[0] = 1.0;
 /// assert!(std::ptr::eq(slice, mat.as_slice().unwrap()));
 /// ```
+#[cfg(feature = "ndarray")]
 impl Matrix for ndarray::Array2<f64> {
     fn flat_slice(&self) -> &[f64] {
         self.as_slice().unwrap()
@@ -114,6 +115,7 @@ impl Matrix for ndarray::Array2<f64> {
 /// slice[0] = 1.0;
 /// assert!(std::ptr::eq(slice, mat.as_slice()));
 /// ```
+#[cfg(feature = "nalgebra")]
 impl Matrix for nalgebra::DMatrix<f64> {
     fn flat_slice(&self) -> &[f64] {
         self.as_slice()
