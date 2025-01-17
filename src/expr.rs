@@ -594,9 +594,49 @@ impl Expr {
     }
 }
 
+/// Implements string formatting for expressions.
+///
+/// This implementation converts expressions to their standard mathematical notation:
+/// - Constants are formatted as numbers
+/// - Variables are formatted as their names
+/// - Binary operations (+,-,*,/) are wrapped in parentheses
+/// - Functions (exp, ln, sqrt) use function call notation
+/// - Absolute value uses |x| notation
+/// - Exponents use ^
+/// - Negation uses - prefix
+/// - Cached expressions display their underlying expression
+impl std::fmt::Display for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Expr::Const(val) => write!(f, "{}", val),
+            Expr::Var(var_ref) => write!(f, "{}", var_ref.name),
+            Expr::Add(left, right) => write!(f, "({} + {})", left, right),
+            Expr::Mul(left, right) => write!(f, "({} * {})", left, right),
+            Expr::Sub(left, right) => write!(f, "({} - {})", left, right),
+            Expr::Div(left, right) => write!(f, "({} / {})", left, right),
+            Expr::Abs(expr) => write!(f, "|{}|", expr),
+            Expr::Pow(base, exp) => write!(f, "({}^{})", base, exp),
+            Expr::Exp(expr) => write!(f, "exp({})", expr),
+            Expr::Ln(expr) => write!(f, "ln({})", expr),
+            Expr::Sqrt(expr) => write!(f, "sqrt({})", expr),
+            Expr::Neg(expr) => write!(f, "-({})", expr),
+            Expr::Cached(expr, _) => write!(f, "{}", expr),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Helper function to create a variable
+    fn var(name: &str) -> Box<Expr> {
+        Box::new(Expr::Var(VarRef {
+            name: name.to_string(),
+            vec_ref: Value::from_u32(0),
+            index: 0,
+        }))
+    }
 
     #[test]
     fn test_simplify() {
@@ -696,5 +736,139 @@ mod tests {
                 var("y"),
             )
         );
+    }
+
+    #[test]
+    fn test_derivative() {
+        // Test constant derivative
+        assert_eq!(*Expr::Const(5.0).derivative("x"), Expr::Const(0.0));
+
+        // Test variable derivatives (x)' = 1, (y)' = 0
+        assert_eq!(*var("x").derivative("x"), Expr::Const(1.0));
+        assert_eq!(*var("y").derivative("x"), Expr::Const(0.0));
+
+        // Test sum rule (u+v)' = u' + v'
+        let sum = Box::new(Expr::Add(var("x"), var("y")));
+        assert_eq!(
+            *sum.derivative("x"),
+            Expr::Add(Box::new(Expr::Const(1.0)), Box::new(Expr::Const(0.0)))
+        );
+
+        // Test product rule (u*v)' = u'*v + u*v'
+        let product = Box::new(Expr::Mul(var("x"), var("y")));
+        assert_eq!(
+            *product.derivative("x"),
+            Expr::Add(
+                Box::new(Expr::Mul(var("x"), Box::new(Expr::Const(0.0)))),
+                Box::new(Expr::Mul(var("y"), Box::new(Expr::Const(1.0))))
+            )
+        );
+
+        // Test power rule (u^v)' = u'*v*u^(v-1) + ln(u)*u^v*v'
+        let power = Box::new(Expr::Pow(var("x"), 3));
+        assert_eq!(
+            *power.derivative("x"),
+            Expr::Mul(
+                Box::new(Expr::Mul(
+                    Box::new(Expr::Const(3.0)),
+                    Box::new(Expr::Pow(var("x"), 2))
+                )),
+                Box::new(Expr::Const(1.0))
+            )
+        );
+    }
+
+    #[test]
+    fn test_complex_simplifications() {
+        // Test nested operations: (x + 0) * (y + 0) → x * y
+        let expr = Box::new(Expr::Mul(
+            Box::new(Expr::Add(var("x"), Box::new(Expr::Const(0.0)))),
+            Box::new(Expr::Add(var("y"), Box::new(Expr::Const(0.0)))),
+        ));
+        assert_eq!(*expr.simplify(), Expr::Mul(var("x"), var("y")));
+
+        // Test double negation: -(-x) → x
+        let expr = Box::new(Expr::Neg(Box::new(Expr::Neg(var("x")))));
+        assert_eq!(*expr.simplify(), *var("x"));
+
+        // Test multiplication by 1: (1 * x) * (y * 1) → x * y
+        let expr = Box::new(Expr::Mul(
+            Box::new(Expr::Mul(Box::new(Expr::Const(1.0)), var("x"))),
+            Box::new(Expr::Mul(var("y"), Box::new(Expr::Const(1.0)))),
+        ));
+        assert_eq!(*expr.simplify(), Expr::Mul(var("x"), var("y")));
+
+        // Test division simplification: (x/y)/(x/y) → 1
+        let div = Box::new(Expr::Div(var("x"), var("y")));
+        let expr = Box::new(Expr::Div(div.clone(), div));
+        assert_eq!(*expr.simplify(), Expr::Const(1.0));
+    }
+
+    #[test]
+    fn test_special_functions() {
+        // Test abs(abs(x)) simplification to abs(x)
+        let expr = Box::new(Expr::Abs(Box::new(Expr::Abs(var("x")))));
+        assert_eq!(*expr.simplify(), Expr::Abs(var("x")));
+
+        // Test sqrt(x^2) - should not simplify as it's not always equal to x
+        let expr = Box::new(Expr::Sqrt(Box::new(Expr::Pow(var("x"), 2))));
+        assert_eq!(*expr.simplify(), *expr);
+
+        // Test constant special functions
+        // exp(0) = 1
+        assert_eq!(
+            *Expr::Exp(Box::new(Expr::Const(0.0))).simplify(),
+            Expr::Const(1.0)
+        );
+        // ln(1) = 0
+        assert_eq!(
+            *Expr::Ln(Box::new(Expr::Const(1.0))).simplify(),
+            Expr::Const(0.0)
+        );
+    }
+
+    #[test]
+    fn test_display() {
+        // Test basic expressions
+        assert_eq!(format!("{}", Expr::Const(5.0)), "5");
+        assert_eq!(format!("{}", *var("x")), "x");
+
+        // Test binary operations
+        let sum = Expr::Add(var("x"), var("y"));
+        assert_eq!(format!("{}", sum), "(x + y)");
+
+        let product = Expr::Mul(var("x"), var("y"));
+        assert_eq!(format!("{}", product), "(x * y)");
+
+        // Test special functions
+        let exp = Expr::Exp(var("x"));
+        assert_eq!(format!("{}", exp), "exp(x)");
+
+        let abs = Expr::Abs(var("x"));
+        assert_eq!(format!("{}", abs), "|x|");
+
+        // Test complex expression
+        let complex = Expr::Div(
+            Box::new(Expr::Add(Box::new(Expr::Pow(var("x"), 2)), var("y"))),
+            var("z"),
+        );
+        assert_eq!(format!("{}", complex), "(((x^2) + y) / z)");
+    }
+
+    #[test]
+    fn test_cached_expressions() {
+        // Test cached constant
+        let cached = Box::new(Expr::Cached(Box::new(Expr::Const(5.0)), Some(5.0)));
+        assert_eq!(*cached.simplify(), *cached);
+
+        // Test uncached expression simplification
+        let uncached = Box::new(Expr::Cached(
+            Box::new(Expr::Add(
+                Box::new(Expr::Const(2.0)),
+                Box::new(Expr::Const(3.0)),
+            )),
+            None,
+        ));
+        assert_eq!(*uncached.simplify(), Expr::Const(5.0));
     }
 }
