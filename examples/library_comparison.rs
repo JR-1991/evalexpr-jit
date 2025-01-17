@@ -276,15 +276,9 @@ fn benchmark_evalexpr_system(
 
     // Benchmark sequential evaluation
     let start = Instant::now();
-    for i in 0..n_runs {
-        let inputs = &[
-            (i + 1) as f64,
-            (i + 2) as f64,
-            (i + 3) as f64,
-            (i + 4) as f64,
-            (i + 5) as f64,
-        ];
-        let _val = system.eval(inputs).unwrap();
+    let inputs = vec![(1) as f64, (2) as f64, (3) as f64, (4) as f64, (5) as f64];
+    for _ in 0..n_runs {
+        let _val = system.eval(&inputs).unwrap();
     }
     let duration_system = start.elapsed();
     println!(
