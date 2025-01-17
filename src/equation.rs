@@ -36,12 +36,14 @@ use std::sync::Arc;
 
 use evalexpr::{build_operator_tree, Node, Operator};
 
-use crate::builder::build_combined_function;
+use crate::backends::vector::Vector;
+use crate::builder::build_function;
 use crate::convert::build_ast;
 use crate::errors::EquationError;
 use crate::expr::Expr;
-use crate::prelude::build_function;
-use crate::types::{CombinedJITFunction, JITFunction};
+use crate::system::OutputType;
+use crate::types::JITFunction;
+use crate::EquationSystem;
 use colored::Colorize;
 use itertools::Itertools;
 
@@ -67,7 +69,7 @@ pub struct Equation {
     fun: JITFunction,
     derivatives_first_order: HashMap<String, JITFunction>,
     derivatives_second_order: Vec<Vec<JITFunction>>,
-    variables: HashMap<String, u32>,
+    var_map: HashMap<String, u32>,
     sorted_variables: Vec<String>,
 }
 
@@ -75,7 +77,7 @@ impl std::fmt::Debug for Equation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "{{\n")?;
         writeln!(f, "    {}: {}\n", "Equation".cyan(), self.equation_str)?;
-        writeln!(f, "    {}: {:?}\n", "Variables".cyan(), self.variables)?;
+        writeln!(f, "    {}: {:?}\n", "Variables".cyan(), self.var_map)?;
         writeln!(
             f,
             "    {}: {:?}\n",
@@ -91,7 +93,7 @@ impl std::fmt::Display for Equation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "{{\n")?;
         writeln!(f, "    {}: {}\n", "Equation".cyan(), self.equation_str)?;
-        writeln!(f, "    {}: {:?}\n", "Variables".cyan(), self.variables)?;
+        writeln!(f, "    {}: {:?}\n", "Variables".cyan(), self.var_map)?;
         writeln!(
             f,
             "    {}: {:?}\n",
@@ -245,7 +247,7 @@ impl Equation {
             fun,
             derivatives_first_order,
             derivatives_second_order,
-            variables: variables.clone(),
+            var_map: variables.clone(),
             sorted_variables,
         })
     }
@@ -269,9 +271,9 @@ impl Equation {
     /// # Errors
     /// Returns `EquationError::InvalidInputLength` if the length of values doesn't match
     /// the number of variables.
-    pub fn eval(&self, values: &[f64]) -> Result<f64, EquationError> {
-        self.validate_input_length(values)?;
-        Ok((self.fun)(values))
+    pub fn eval<V: Vector>(&self, values: &V) -> Result<f64, EquationError> {
+        self.validate_input_length(values.as_slice())?;
+        Ok((self.fun)(values.as_slice()))
     }
 
     /// Computes the gradient (all first order partial derivatives) at the given point.
@@ -434,27 +436,25 @@ impl Equation {
     /// let derivatives = eq.derive_wrt_stack(&["x", "y"]).unwrap();
     /// let values = vec![2.0, 3.0, 4.0];
     /// let mut results = vec![0.0, 0.0];
-    /// derivatives(&values, &mut results); // evaluate [∂/∂x, ∂/∂y] at (2,3,4)
-    /// assert_eq!(results, vec![4.0, 6.0]); // [2x, 2y]
+    /// derivatives.eval_into(&values, &mut results).unwrap(); // evaluate first derivatives [∂/∂x, ∂/∂y] at (2,3,4)
+    /// assert_eq!(results, vec![4.0, 6.0]); // [∂f/∂x = 2x, ∂f/∂y = 2y]
     /// ```
     ///
     /// # Errors
     /// Returns `EquationError::DerivativeNotFound` if any variable is not found.
-    pub fn derive_wrt_stack(
-        &self,
-        variables: &[&str],
-    ) -> Result<CombinedJITFunction, EquationError> {
+    pub fn derive_wrt_stack(&self, variables: &[&str]) -> Result<EquationSystem, EquationError> {
         // Derive the derivatives of the equation with respect to the variables
         let mut derivative_asts = Vec::with_capacity(variables.len());
         for variable in variables {
             derivative_asts.push(self.ast.derivative(variable));
         }
-        build_combined_function(derivative_asts.clone(), variables.len())
+
+        EquationSystem::from_asts(derivative_asts, &self.var_map, OutputType::Vector)
     }
 
     /// Returns the map of variable names to their indices.
     pub fn variables(&self) -> &HashMap<String, u32> {
-        &self.variables
+        &self.var_map
     }
 
     /// Returns the original equation string.
@@ -576,7 +576,7 @@ impl Clone for Equation {
             fun: Arc::clone(&self.fun),
             derivatives_first_order: self.derivatives_first_order.clone(),
             derivatives_second_order: self.derivatives_second_order.clone(),
-            variables: self.variables.clone(),
+            var_map: self.var_map.clone(),
             sorted_variables: self.sorted_variables.clone(),
         }
     }
@@ -668,7 +668,7 @@ mod tests {
         let derivatives = eq.derive_wrt_stack(&["x", "z"]).unwrap();
         let values = vec![2.0, 3.0, 2.0]; // [x, y, z]
         let mut results = vec![0.0, 0.0];
-        derivatives(&values, &mut results);
+        derivatives.eval_into(&values, &mut results).unwrap();
 
         // ∂/∂x = 2x + 2y = 2(2) + 2(3) = 10
         // ∂/∂z = 3z^2 = 3(2^2) = 12
@@ -677,7 +677,103 @@ mod tests {
         // Test different order [z, x] to verify order matters
         let derivatives = eq.derive_wrt_stack(&["z", "x"]).unwrap();
         let mut results = vec![0.0, 0.0];
-        derivatives(&values, &mut results);
+        derivatives.eval_into(&values, &mut results).unwrap();
         assert_eq!(results, vec![12.0, 10.0]);
+    }
+
+    #[test]
+    fn test_all_backends() {
+        use nalgebra::DVector;
+        use ndarray::Array1;
+
+        let eq = Equation::new("2*x + y^2".to_string()).unwrap();
+        let expected = 6.0; // 2*1 + 2^2 = 6.0
+
+        // Test Vec (standard)
+        let vec_input = vec![1.0, 2.0];
+        assert_eq!(eq.eval(&vec_input).unwrap(), expected);
+
+        // Test nalgebra
+        let nalgebra_input = DVector::from_vec(vec![1.0, 2.0]);
+        assert_eq!(eq.eval(&nalgebra_input).unwrap(), expected);
+
+        // Test ndarray
+        let ndarray_input = Array1::from_vec(vec![1.0, 2.0]);
+        assert_eq!(eq.eval(&ndarray_input).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_extract_all_symbols() {
+        let equations = vec![
+            "2*x + y".to_string(),
+            "z + x^2".to_string(),
+            "y*z".to_string(),
+        ];
+        let variables = extract_all_symbols(&equations);
+        assert_eq!(
+            variables,
+            vec!["x".to_string(), "y".to_string(), "z".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_debug_and_display_formatting() {
+        let eq = Equation::new("2*x + y^2".to_string()).unwrap();
+
+        // Test Debug formatting
+        let debug_output = format!("{:?}", eq);
+        assert!(debug_output.contains("Equation"));
+        assert!(debug_output.contains("2*x + y^2"));
+
+        // Test Display formatting
+        let display_output = format!("{}", eq);
+        assert!(display_output.contains("Equation"));
+        assert!(display_output.contains("2*x + y^2"));
+    }
+
+    #[test]
+    fn test_equation_clone() {
+        let eq = Equation::new("2*x + y^2".to_string()).unwrap();
+        let cloned = eq.clone();
+
+        // Test that both evaluate to the same result
+        let values = vec![1.0, 2.0];
+        assert_eq!(eq.eval(&values).unwrap(), cloned.eval(&values).unwrap());
+
+        // Test that gradients match
+        assert_eq!(
+            eq.gradient(&values).unwrap(),
+            cloned.gradient(&values).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_invalid_expression() {
+        let result = Equation::new("2*x + )".to_string());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_accessor_methods() {
+        let eq = Equation::new("2*x + y^2".to_string()).unwrap();
+
+        assert_eq!(eq.equation_str(), "2*x + y^2");
+        assert!(!eq.variables().is_empty());
+        assert!(!eq.sorted_variables().is_empty());
+    }
+
+    #[test]
+    fn test_variable_ordering() {
+        let mut vars = HashMap::new();
+        vars.insert("z".to_string(), 0);
+        vars.insert("y".to_string(), 1);
+        vars.insert("x".to_string(), 2);
+
+        let eq = Equation::from_var_map("x + y + z".to_string(), &vars).unwrap();
+        assert_eq!(eq.sorted_variables(), &["z", "y", "x"]);
+
+        // Test evaluation with ordered inputs
+        let result = eq.eval(&[1.0, 2.0, 3.0]).unwrap(); // z=1, y=2, x=3
+        assert_eq!(result, 6.0);
     }
 }
