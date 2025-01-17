@@ -20,10 +20,10 @@
 //! let eq = Equation::new("2*x + y^2".to_string()).unwrap();
 //!
 //! // Evaluate at point (x=1, y=2)
-//! let result = eq.eval(&[1.0, 2.0]).unwrap(); // Returns 6.0
+//! let result = eq.eval(&vec![1.0, 2.0]).unwrap(); // Returns 6.0
 //!
 //! // Compute gradient [∂/∂x, ∂/∂y]
-//! let gradient = eq.gradient(&[1.0, 2.0]).unwrap(); // Returns [2.0, 4.0]
+//! let gradient = eq.gradient(&vec![1.0, 2.0]).unwrap(); // Returns [2.0, 4.0]
 //! ```
 
 pub use equation::Equation;
@@ -31,10 +31,11 @@ pub use expr::Expr;
 pub use system::EquationSystem;
 
 pub mod prelude {
-    pub use crate::builder::build_function;
-    pub use crate::convert::build_ast;
+    pub use crate::backends::matrix::Matrix;
+    pub use crate::backends::vector::Vector;
     pub use crate::equation::Equation;
     pub use crate::expr::Expr;
+    pub use crate::system::EquationSystem;
 }
 
 /// JIT compilation functionality using Cranelift
@@ -57,3 +58,9 @@ pub(crate) mod operators {
 }
 /// Type definitions for JIT-compiled functions
 pub mod types;
+
+/// Backends for vector operations
+pub mod backends {
+    pub mod matrix;
+    pub mod vector;
+}
