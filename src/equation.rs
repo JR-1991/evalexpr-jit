@@ -446,7 +446,7 @@ impl Equation {
         // Derive the derivatives of the equation with respect to the variables
         let mut derivative_asts = Vec::with_capacity(variables.len());
         for variable in variables {
-            derivative_asts.push(self.ast.derivative(variable));
+            derivative_asts.push(*self.ast.derivative(variable));
         }
 
         EquationSystem::from_asts(derivative_asts, &self.var_map, OutputType::Vector)

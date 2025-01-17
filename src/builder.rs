@@ -295,7 +295,7 @@ fn compile_and_finalize(
 /// # Panics
 /// The returned function will panic if the results slice length doesn't match results_len
 pub fn build_combined_function(
-    exprs: Vec<Box<Expr>>,
+    exprs: Vec<Expr>,
     results_len: usize,
 ) -> Result<CombinedJITFunction, EquationError> {
     // Set up JIT compilation context

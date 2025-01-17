@@ -107,7 +107,7 @@ pub struct EquationSystem {
     /// The original string representations of the equations
     pub equations: Vec<String>,
     /// The AST representations of the equations
-    pub asts: Vec<Box<Expr>>,
+    pub asts: Vec<Expr>,
     /// Maps variable names to their indices in the input array
     pub variable_map: HashMap<String, u32>,
     /// Variables in sorted order for consistent input ordering
@@ -213,7 +213,7 @@ impl EquationSystem {
     /// # Returns
     /// A new `EquationSystem` with JIT-compiled evaluation function using the specified ASTs
     pub(crate) fn from_asts(
-        asts: Vec<Box<Expr>>,
+        asts: Vec<Expr>,
         variable_map: &HashMap<String, u32>,
         output_type: OutputType,
     ) -> Result<Self, EquationError> {
@@ -235,7 +235,7 @@ impl EquationSystem {
     /// # Returns
     /// A new `EquationSystem` with JIT-compiled evaluation function and derivative capabilities
     fn build(
-        asts: Vec<Box<Expr>>,
+        asts: Vec<Expr>,
         equations: Vec<String>,
         variable_map: HashMap<String, u32>,
         output_type: OutputType,
@@ -255,8 +255,8 @@ impl EquationSystem {
         for var in sorted_variables {
             let derivative_ast = asts
                 .iter()
-                .map(|ast| ast.derivative(&var))
-                .collect::<Vec<Box<Expr>>>();
+                .map(|ast| *ast.derivative(&var))
+                .collect::<Vec<Expr>>();
             let jacobian_fun = build_combined_function(derivative_ast, asts.len())?;
             jacobian_funs.insert(var, jacobian_fun);
         }
@@ -291,7 +291,7 @@ impl EquationSystem {
     fn create_asts(
         expressions: &[String],
         variable_map: &HashMap<String, u32>,
-    ) -> Result<Vec<Box<Expr>>, EquationError> {
+    ) -> Result<Vec<Expr>, EquationError> {
         expressions
             .iter()
             .map(|expr| {
@@ -307,7 +307,7 @@ impl EquationSystem {
 
                 // Build and simplify AST
                 let ast = build_ast(&node, variable_map)?;
-                Ok(ast.simplify())
+                Ok(*ast.simplify())
             })
             .collect::<Result<Vec<_>, EquationError>>()
     }
@@ -592,7 +592,7 @@ impl EquationSystem {
         let mut asts = vec![];
         for ast in self.asts.iter() {
             for var in variables {
-                asts.push(ast.derivative(var));
+                asts.push(*ast.derivative(var));
             }
         }
 
@@ -641,7 +641,7 @@ impl EquationSystem {
         for var in variables {
             derivative_asts = derivative_asts
                 .into_iter()
-                .map(|ast| ast.derivative(var))
+                .map(|ast| *ast.derivative(var))
                 .collect();
         }
 
