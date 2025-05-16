@@ -1,6 +1,6 @@
 [package]
 name = "evalexpr-jit"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["Jan Range <jan.range@simtech.uni-stuttgart.de>"]
 description = "JIT compilation and symbolic differentiation of evalexpr expressions with Cranelift."
