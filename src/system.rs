@@ -484,8 +484,7 @@ impl EquationSystem {
     ///
     /// # Arguments
     /// * `inputs` - Slice of input values at which to evaluate the Jacobian
-    /// * `variables` - Optional slice of variable names to include in the Jacobian.
-    ///                If None, includes all variables in sorted order.
+    /// * `variables` - Optional slice of variable names to include in the Jacobian. If None, includes all variables in sorted order.
     ///
     /// # Returns
     /// The Jacobian matrix as a vector of vectors, where each inner vector

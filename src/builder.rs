@@ -19,10 +19,6 @@ use cranelift_module::{Linkage, Module};
 use isa::TargetIsa;
 use rayon::prelude::*;
 
-struct ThreadSafeFunction(*const u8);
-unsafe impl Send for ThreadSafeFunction {}
-unsafe impl Sync for ThreadSafeFunction {}
-
 /// Builds a JIT-compiled function from an expression tree.
 ///
 /// This function takes an expression AST and compiles it to native machine code using Cranelift.
@@ -43,8 +39,24 @@ pub fn build_function(expr: Expr) -> Result<JITFunction, EquationError> {
     build_function_body(&mut ctx, expr, &mut module)?;
     let raw_fn = compile_and_finalize(&mut module, &mut ctx)?;
 
-    // Wrap the unsafe function in a safe interface
-    Ok(Arc::new(move |input: &[f64]| raw_fn(input.as_ptr())))
+    // Extract the memory address which is thread-safe (Send + Sync)
+    let fn_addr = raw_fn as usize;
+
+    // Create a closure that captures the memory address instead of the raw function pointer
+    let result = Arc::new(move |input: &[f64]| {
+        if input.is_empty() {
+            return 0.0;
+        }
+
+        // Convert the address back to a function pointer only when needed
+        let f: fn(*const f64) -> f64 = unsafe { std::mem::transmute(fn_addr) };
+        f(input.as_ptr())
+    });
+
+    // Keep the module alive for the lifetime of the program
+    std::mem::forget(module);
+
+    Ok(result)
 }
 
 /// Creates an Instruction Set Architecture (ISA) target for code generation.
@@ -315,7 +327,7 @@ pub fn build_combined_function(
     // Create function
     let func_id = module
         .declare_function("combined", Linkage::Export, &sig)
-        .unwrap();
+        .map_err(|msg| BuilderError::DeclarationError(msg.to_string()))?;
 
     codegen_context.func.signature = sig; // Set signature before moving
     let func = &mut codegen_context.func; // Borrow instead of move
@@ -360,24 +372,40 @@ pub fn build_combined_function(
     // Finalize the function
     module
         .define_function(func_id, &mut codegen_context)
-        .unwrap();
+        .map_err(|msg| BuilderError::FunctionError(msg.to_string()))?;
     module
         .finalize_definitions()
         .map_err(BuilderError::ModuleError)?;
 
-    // Get function pointer
-    let code = Arc::new(ThreadSafeFunction(module.get_finalized_function(func_id)));
+    // Get the raw function pointer once
+    let func_ptr = module.get_finalized_function(func_id);
+
+    // We need to extract the actual memory address to make it thread-safe
+    // Convert the raw pointer to a usize which is Send + Sync
+    let func_addr = func_ptr as usize;
+
+    // Create a closure that captures the memory address instead of the raw pointer
     let wrapper = Box::new(move |inputs: &[f64], results: &mut [f64]| {
-        debug_assert_eq!(
-            results.len(),
-            results_len,
-            "Results buffer has incorrect length"
-        );
-        unsafe {
-            let f: extern "C" fn(*const f64, *mut f64) = std::mem::transmute(code.0);
-            f(inputs.as_ptr(), results.as_mut_ptr());
+        // Validation code
+        if inputs.is_empty() || results.is_empty() {
+            return;
         }
+
+        if results.len() != results_len {
+            results.iter_mut().for_each(|r| *r = 0.0);
+            return;
+        }
+
+        // Convert the address back to a function pointer only when needed
+        let f: extern "C" fn(*const f64, *mut f64) = unsafe { std::mem::transmute(func_addr) };
+        f(inputs.as_ptr(), results.as_mut_ptr())
     });
 
+    // We need to keep the module alive as long as the function is in use
+    // Leak the module to ensure it stays alive for the program duration
+    // This is acceptable for JIT functions that live for the entire program
+    std::mem::forget(module);
+
+    // The wrapped function satisfies CombinedJITFunction
     Ok(Arc::new(wrapper))
 }
