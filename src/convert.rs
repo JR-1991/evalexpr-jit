@@ -14,7 +14,7 @@ use crate::{
     errors::ConvertError,
     expr::{Expr, VarRef},
 };
-use cranelift::prelude::*;
+
 use evalexpr::{Node, Operator};
 
 /// Converts an evalexpr AST node into our JIT-compilable expression format.
@@ -112,7 +112,7 @@ pub fn build_ast(node: &Node, var_map: &HashMap<String, u32>) -> Result<Expr, Co
                 )))?;
             Ok(Expr::Var(VarRef {
                 name: identifier.to_string(),
-                vec_ref: Value::from_u32(0), // Placeholder value, updated during codegen
+                vec_ref: 0, // Placeholder value, updated during codegen
                 index: *index,
             }))
         }

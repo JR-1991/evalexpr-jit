@@ -2,15 +2,23 @@
 //!
 //! This module provides functionality to:
 //! - Link the external exponential function (exp) into JIT-compiled code
-//! - Generate Cranelift IR instructions to call exp within compiled functions
+//! - Generate IR instructions to call exp within compiled functions
 //!
 //! The exponential function operates on 64-bit floating point numbers (f64).
 
+#[cfg(feature = "cranelift-backend")]
 use cranelift::prelude::FunctionBuilder;
+#[cfg(feature = "cranelift-backend")]
 use cranelift_codegen::ir::types::F64; // since exp works with doubles
+#[cfg(feature = "cranelift-backend")]
 use cranelift_codegen::ir::{AbiParam, InstBuilder};
-use cranelift_module::{FuncId, Linkage, Module};
+#[cfg(feature = "cranelift-backend")]
+use cranelift_module::{FuncId, Linkage, Module as CraneliftModule};
 
+#[cfg(feature = "llvm-backend")]
+use inkwell::{module::Module as LLVMModule, types::FunctionType, values::FunctionValue};
+
+#[cfg(feature = "cranelift-backend")]
 /// Links the exponential function to make it available for JIT compilation.
 ///
 /// This function declares the external exp function to the Cranelift module,
@@ -23,7 +31,7 @@ use cranelift_module::{FuncId, Linkage, Module};
 /// # Returns
 /// * `Ok(FuncId)` - The function ID that can be used to call exp
 /// * `Err(String)` - Error message if declaration fails
-pub fn link_exp(module: &mut dyn Module) -> Result<FuncId, String> {
+pub fn link_exp(module: &mut dyn CraneliftModule) -> Result<FuncId, String> {
     // Create signature for exp(f64) -> f64
     let mut sig = module.make_signature();
     sig.params.push(AbiParam::new(F64));
@@ -37,6 +45,7 @@ pub fn link_exp(module: &mut dyn Module) -> Result<FuncId, String> {
     Ok(func_id)
 }
 
+#[cfg(feature = "cranelift-backend")]
 /// Generates Cranelift IR instructions to call the exponential function.
 ///
 /// This helper function adds instructions to call the previously linked exp
@@ -52,11 +61,41 @@ pub fn link_exp(module: &mut dyn Module) -> Result<FuncId, String> {
 /// The Cranelift IR value containing the result of calling exp
 pub fn call_exp(
     builder: &mut FunctionBuilder,
-    module: &mut dyn Module,
+    module: &mut dyn CraneliftModule,
     func_id: cranelift_module::FuncId,
     arg: cranelift_codegen::ir::Value,
 ) -> cranelift_codegen::ir::Value {
     let func = module.declare_func_in_func(func_id, builder.func);
     let call = builder.ins().call(func, &[arg]);
     builder.inst_results(call)[0]
+}
+
+#[cfg(feature = "llvm-backend")]
+/// Gets or inserts the exponential function in an LLVM module.
+///
+/// This function checks if the exp function is already declared in the module.
+/// If not, it adds a declaration. Returns the LLVM function value for the exp function.
+///
+/// # Arguments
+/// * `module` - The LLVM module to get or insert the function in
+///
+/// # Returns
+/// * `Ok(FunctionValue)` - The LLVM function value for the exp function
+/// * `Err(String)` - Error message if declaration fails
+pub fn get_or_insert_function<'ctx>(
+    module: &LLVMModule<'ctx>,
+) -> Result<FunctionValue<'ctx>, String> {
+    // Check if function already exists in module
+    if let Some(func) = module.get_function("exp") {
+        return Ok(func);
+    }
+
+    // Function doesn't exist, so declare it
+    let context = module.get_context();
+    let f64_type = context.f64_type();
+    let fn_type = f64_type.fn_type(&[f64_type.into()], false);
+
+    let function = module.add_function("exp", fn_type, None);
+
+    Ok(function)
 }

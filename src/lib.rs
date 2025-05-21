@@ -2,11 +2,13 @@
 //!
 //! This crate provides JIT compilation and automatic differentiation for mathematical expressions.
 //! It parses expressions using [evalexpr](https://github.com/ISibboI/evalexpr) and compiles them to
-//! native machine code using [Cranelift](https://github.com/bytecodealliance/wasmtime/tree/main/cranelift).
+//! native machine code using either [LLVM](https://llvm.org/) or
+//! [Cranelift](https://github.com/bytecodealliance/wasmtime/tree/main/cranelift).
 //!
 //! # Features
 //!
 //! - Fast evaluation through JIT compilation to native code
+//! - Multiple backend options (LLVM by default, Cranelift available)
 //! - Automatic differentiation for gradients and Hessians
 //! - Support for variables, constants, and mathematical functions
 //! - Safe Rust implementation with comprehensive error handling
@@ -25,6 +27,17 @@
 //! // Compute gradient [∂/∂x, ∂/∂y]
 //! let gradient = eq.gradient(&vec![1.0, 2.0]).unwrap(); // Returns [2.0, 4.0]
 //! ```
+//!
+//! # Backend Selection
+//!
+//! By default, this crate uses LLVM as the JIT compilation backend through the
+//! `llvm-backend` feature. You can switch to Cranelift by disabling default features
+//! and enabling the `cranelift-backend` feature:
+//!
+//! ```toml
+//! [dependencies]
+//! evalexpr-jit = { version = "0.2.1", default-features = false, features = ["cranelift-backend"] }
+//! ```
 
 pub use equation::Equation;
 pub use expr::Expr;
@@ -38,7 +51,7 @@ pub mod prelude {
     pub use crate::system::EquationSystem;
 }
 
-/// JIT compilation functionality using Cranelift
+/// JIT compilation functionality
 pub mod builder;
 /// Conversion from evalexpr AST to internal expression format
 pub mod convert;

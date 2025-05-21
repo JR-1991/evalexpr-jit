@@ -9,7 +9,9 @@
 //!
 //! Each error type implements the standard Error trait and provides detailed error messages.
 
+#[cfg(feature = "cranelift-backend")]
 use cranelift_codegen::CodegenError;
+#[cfg(feature = "cranelift-backend")]
 use cranelift_module::ModuleError;
 use evalexpr::{DefaultNumericTypes, EvalexprError};
 use thiserror::Error;
@@ -50,9 +52,11 @@ pub enum BuilderError {
     #[error("host machine is not supported: {0}")]
     HostMachineNotSupported(String),
     /// Error during Cranelift code generation
+    #[cfg(feature = "cranelift-backend")]
     #[error("codegen error: {0}")]
     CodegenError(CodegenError),
     /// Error in the Cranelift JIT module
+    #[cfg(feature = "cranelift-backend")]
     #[error("module error: {0}")]
     ModuleError(ModuleError),
     /// Error when defining the JIT function
@@ -102,4 +106,9 @@ pub enum EquationError {
         got_rows: usize,
         got_cols: usize,
     },
+    /// Error when no JIT backend is enabled
+    #[error(
+        "No JIT backend enabled. Enable either 'cranelift-backend' or 'llvm-backend' features."
+    )]
+    JITError(String),
 }

@@ -51,9 +51,21 @@
 //! - Replacing matched nodes with a new expression
 //! - Recursively traversing and rebuilding the tree
 
+#[cfg(feature = "cranelift-backend")]
 use cranelift::prelude::*;
+#[cfg(feature = "cranelift-backend")]
 use cranelift_codegen::ir::{immediates::Offset32, Value};
+#[cfg(feature = "cranelift-backend")]
 use cranelift_module::Module;
+
+#[cfg(feature = "llvm-backend")]
+use inkwell::{
+    builder::Builder,
+    context::Context,
+    module::Module as LLVMModule,
+    values::{BasicValue, FloatValue, PointerValue},
+    AddressSpace, FloatPredicate,
+};
 
 use crate::{errors::EquationError, operators};
 
@@ -61,12 +73,12 @@ use crate::{errors::EquationError, operators};
 ///
 /// Contains metadata needed to generate code that loads the variable's value:
 /// - The variable's name as a string
-/// - A Cranelift Value representing the pointer to the input array
+/// - A generic reference to the input array (backend-agnostic)
 /// - The variable's index in the input array
 #[derive(Debug, Clone, PartialEq)]
 pub struct VarRef {
     pub name: String,
-    pub vec_ref: Value,
+    pub vec_ref: usize,
     pub index: u32,
 }
 
@@ -110,6 +122,7 @@ pub enum Expr {
 }
 
 impl Expr {
+    #[cfg(feature = "cranelift-backend")]
     /// Generates Cranelift IR code for this expression.
     ///
     /// Recursively traverses the expression tree and generates the appropriate
@@ -132,7 +145,7 @@ impl Expr {
         match self {
             Expr::Const(val) => Ok(builder.ins().f64const(*val)),
             Expr::Var(VarRef { vec_ref, index, .. }) => {
-                let ptr = *vec_ref;
+                let ptr = Value::from_u32((*vec_ref) as u32);
                 let offset = *index as i32 * 8;
                 Ok(builder
                     .ins()
@@ -592,6 +605,292 @@ impl Expr {
             }
         }
     }
+
+    #[cfg(feature = "llvm-backend")]
+    /// Generates LLVM IR code for this expression.
+    ///
+    /// Recursively traverses the expression tree and generates the appropriate
+    /// LLVM instructions to compute the expression's value at runtime.
+    ///
+    /// # Arguments
+    /// * `builder` - The LLVM IR Builder to emit instructions into
+    /// * `module` - The LLVM Module to link functions
+    /// * `input_ptr` - The LLVM pointer to the input array
+    ///
+    /// # Returns
+    /// A LLVM FloatValue representing the result of this expression
+    ///
+    /// # Errors
+    /// Returns an EquationError if code generation fails
+    pub fn codegen_llvm<'ctx>(
+        &self,
+        context: &'ctx Context,
+        builder: &Builder<'ctx>,
+        module: &LLVMModule<'ctx>,
+        input_ptr: PointerValue<'ctx>,
+    ) -> Result<FloatValue<'ctx>, EquationError> {
+        match self {
+            Expr::Const(val) => {
+                let float_val = context.f64_type().const_float(*val);
+                Ok(float_val)
+            }
+            Expr::Var(VarRef { index, name, .. }) => {
+                // Calculate the offset in the input array
+                let idx = context.i32_type().const_int(*index as u64, false);
+
+                // Get pointer to the variable
+                let var_ptr = unsafe {
+                    builder
+                        .build_in_bounds_gep(context.f64_type(), input_ptr, &[idx], name)
+                        .map_err(|e| {
+                            EquationError::JITError(format!(
+                                "Failed to build GEP for variable {}: {}",
+                                name, e
+                            ))
+                        })?
+                };
+
+                // Load the value
+                let loaded = builder
+                    .build_load(context.f64_type(), var_ptr, name)
+                    .map_err(|e| {
+                        EquationError::JITError(format!("Failed to load variable {}: {}", name, e))
+                    })?;
+                Ok(loaded.into_float_value())
+            }
+            Expr::Add(left, right) => {
+                let lhs = left.codegen_llvm(context, builder, module, input_ptr)?;
+                let rhs = right.codegen_llvm(context, builder, module, input_ptr)?;
+
+                Ok(builder
+                    .build_float_add(lhs, rhs, "addtmp")
+                    .map_err(|e| EquationError::JITError(format!("Failed to build add: {}", e)))?)
+            }
+            Expr::Sub(left, right) => {
+                let lhs = left.codegen_llvm(context, builder, module, input_ptr)?;
+                let rhs = right.codegen_llvm(context, builder, module, input_ptr)?;
+
+                Ok(builder.build_float_sub(lhs, rhs, "subtmp").map_err(|e| {
+                    EquationError::JITError(format!("Failed to build subtraction: {}", e))
+                })?)
+            }
+            Expr::Mul(left, right) => {
+                let lhs = left.codegen_llvm(context, builder, module, input_ptr)?;
+                let rhs = right.codegen_llvm(context, builder, module, input_ptr)?;
+
+                Ok(builder.build_float_mul(lhs, rhs, "multmp").map_err(|e| {
+                    EquationError::JITError(format!("Failed to build multiplication: {}", e))
+                })?)
+            }
+            Expr::Div(left, right) => {
+                let lhs = left.codegen_llvm(context, builder, module, input_ptr)?;
+                let rhs = right.codegen_llvm(context, builder, module, input_ptr)?;
+
+                Ok(builder.build_float_div(lhs, rhs, "divtmp").map_err(|e| {
+                    EquationError::JITError(format!("Failed to build division: {}", e))
+                })?)
+            }
+            Expr::Abs(expr) => {
+                let val = expr.codegen_llvm(context, builder, module, input_ptr)?;
+
+                // Implement abs using select: if val < 0 then -val else val
+                let zero = context.f64_type().const_float(0.0);
+                let is_negative = builder
+                    .build_float_compare(FloatPredicate::OLT, val, zero, "is_neg")
+                    .map_err(|e| {
+                        EquationError::JITError(format!("Failed to build float compare: {}", e))
+                    })?;
+
+                let neg_val = builder.build_float_neg(val, "negtmp").map_err(|e| {
+                    EquationError::JITError(format!("Failed to build negation: {}", e))
+                })?;
+
+                Ok(builder
+                    .build_select(is_negative, neg_val, val, "abs_result")
+                    .map_err(|e| EquationError::JITError(format!("Failed to build select: {}", e)))?
+                    .into_float_value())
+            }
+            Expr::Pow(base, exp) => {
+                let base_val = base.codegen_llvm(context, builder, module, input_ptr)?;
+
+                match *exp {
+                    0 => Ok(context.f64_type().const_float(1.0)),
+                    1 => Ok(base_val),
+                    2 => {
+                        // Special case for x^2
+                        Ok(builder
+                            .build_float_mul(base_val, base_val, "pow2")
+                            .map_err(|e| {
+                                EquationError::JITError(format!("Failed to build power: {}", e))
+                            })?)
+                    }
+                    3 => {
+                        // Special case for x^3
+                        let square = builder
+                            .build_float_mul(base_val, base_val, "square")
+                            .map_err(|e| {
+                                EquationError::JITError(format!("Failed to build power: {}", e))
+                            })?;
+
+                        Ok(builder
+                            .build_float_mul(square, base_val, "pow3")
+                            .map_err(|e| {
+                                EquationError::JITError(format!("Failed to build power: {}", e))
+                            })?)
+                    }
+                    exp => {
+                        // For other exponents, use a binary exponentiation algorithm
+                        if exp < 0 {
+                            // For negative exponents: 1.0 / (x^abs(exp))
+                            let mut result = context.f64_type().const_float(1.0);
+                            let mut base = base_val;
+                            let mut n = (-exp) as u64;
+
+                            // Binary exponentiation
+                            while n > 0 {
+                                if n & 1 == 1 {
+                                    result = builder
+                                        .build_float_mul(result, base, "powmul")
+                                        .map_err(|e| {
+                                            EquationError::JITError(format!(
+                                                "Failed to build power: {}",
+                                                e
+                                            ))
+                                        })?;
+                                }
+                                base = builder.build_float_mul(base, base, "powsquare").map_err(
+                                    |e| {
+                                        EquationError::JITError(format!(
+                                            "Failed to build power: {}",
+                                            e
+                                        ))
+                                    },
+                                )?;
+                                n >>= 1;
+                            }
+
+                            let one = context.f64_type().const_float(1.0);
+                            Ok(builder
+                                .build_float_div(one, result, "invpow")
+                                .map_err(|e| {
+                                    EquationError::JITError(format!("Failed to build power: {}", e))
+                                })?)
+                        } else {
+                            // For positive exponents
+                            let mut result = context.f64_type().const_float(1.0);
+                            let mut base = base_val;
+                            let mut n = exp as u64;
+
+                            // Binary exponentiation
+                            while n > 0 {
+                                if n & 1 == 1 {
+                                    result = builder
+                                        .build_float_mul(result, base, "powmul")
+                                        .map_err(|e| {
+                                            EquationError::JITError(format!(
+                                                "Failed to build power: {}",
+                                                e
+                                            ))
+                                        })?;
+                                }
+                                base = builder.build_float_mul(base, base, "powsquare").map_err(
+                                    |e| {
+                                        EquationError::JITError(format!(
+                                            "Failed to build power: {}",
+                                            e
+                                        ))
+                                    },
+                                )?;
+                                n >>= 1;
+                            }
+
+                            Ok(result)
+                        }
+                    }
+                }
+            }
+            Expr::Exp(expr) => {
+                let val = expr.codegen_llvm(context, builder, module, input_ptr)?;
+
+                // Get the exp function
+                let exp_fn = operators::exp::get_or_insert_function(module)
+                    .map_err(|e| EquationError::JITError(e))?;
+
+                // Call exp function
+                let result = builder
+                    .build_call(exp_fn, &[val.into()], "expcall")
+                    .map_err(|e| {
+                        EquationError::JITError(format!("Failed to build exp call: {}", e))
+                    })?;
+
+                // Extract return value
+                Ok(result
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_float_value())
+            }
+            Expr::Ln(expr) => {
+                let val = expr.codegen_llvm(context, builder, module, input_ptr)?;
+
+                // Get the ln function
+                let ln_fn = operators::ln::get_or_insert_function(module)
+                    .map_err(|e| EquationError::JITError(e))?;
+
+                // Call ln function
+                let result = builder
+                    .build_call(ln_fn, &[val.into()], "lncall")
+                    .map_err(|e| {
+                        EquationError::JITError(format!("Failed to build ln call: {}", e))
+                    })?;
+
+                // Extract return value
+                Ok(result
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_float_value())
+            }
+            Expr::Sqrt(expr) => {
+                let val = expr.codegen_llvm(context, builder, module, input_ptr)?;
+
+                // Get the sqrt function
+                let sqrt_fn = operators::sqrt::get_or_insert_function(module)
+                    .map_err(|e| EquationError::JITError(e))?;
+
+                // Call sqrt function
+                let result = builder
+                    .build_call(sqrt_fn, &[val.into()], "sqrtcall")
+                    .map_err(|e| {
+                        EquationError::JITError(format!("Failed to build sqrt call: {}", e))
+                    })?;
+
+                // Extract return value
+                Ok(result
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_float_value())
+            }
+            Expr::Neg(expr) => {
+                let val = expr.codegen_llvm(context, builder, module, input_ptr)?;
+
+                Ok(builder.build_float_neg(val, "negtmp").map_err(|e| {
+                    EquationError::JITError(format!("Failed to build negation: {}", e))
+                })?)
+            }
+            Expr::Cached(expr, cached_value) => {
+                if let Some(val) = cached_value {
+                    // Use the cached value
+                    let float_val = context.f64_type().const_float(*val);
+                    Ok(float_val)
+                } else {
+                    // Generate code for the expression
+                    expr.codegen_llvm(context, builder, module, input_ptr)
+                }
+            }
+        }
+    }
 }
 
 /// Implements string formatting for expressions.
@@ -633,7 +932,7 @@ mod tests {
     fn var(name: &str) -> Box<Expr> {
         Box::new(Expr::Var(VarRef {
             name: name.to_string(),
-            vec_ref: Value::from_u32(0),
+            vec_ref: 0, // Dummy value for testing
             index: 0,
         }))
     }
@@ -644,7 +943,7 @@ mod tests {
         fn var(name: &str) -> Box<Expr> {
             Box::new(Expr::Var(VarRef {
                 name: name.to_string(),
-                vec_ref: Value::from_u32(0), // Dummy value for testing
+                vec_ref: 0, // Dummy value for testing
                 index: 0,
             }))
         }
@@ -715,7 +1014,7 @@ mod tests {
         fn var(name: &str) -> Box<Expr> {
             Box::new(Expr::Var(VarRef {
                 name: name.to_string(),
-                vec_ref: Value::from_u32(0),
+                vec_ref: 0,
                 index: 0,
             }))
         }

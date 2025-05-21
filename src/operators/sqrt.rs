@@ -2,15 +2,23 @@
 //!
 //! This module provides functionality to:
 //! - Link the external square root function (sqrt) into JIT-compiled code
-//! - Generate Cranelift IR instructions to call sqrt within compiled functions
+//! - Generate IR instructions to call sqrt within compiled functions
 //!
 //! The square root function operates on 64-bit floating point numbers (f64).
 
+#[cfg(feature = "cranelift-backend")]
 use cranelift::prelude::FunctionBuilder;
-use cranelift_codegen::ir::types::F64; // since sqrt works with doubles
+#[cfg(feature = "cranelift-backend")]
+use cranelift_codegen::ir::types::F64;
+#[cfg(feature = "cranelift-backend")]
 use cranelift_codegen::ir::{AbiParam, InstBuilder};
-use cranelift_module::{FuncId, Linkage, Module};
+#[cfg(feature = "cranelift-backend")]
+use cranelift_module::{FuncId, Linkage, Module as CraneliftModule};
 
+#[cfg(feature = "llvm-backend")]
+use inkwell::{module::Module as LLVMModule, types::FunctionType, values::FunctionValue};
+
+#[cfg(feature = "cranelift-backend")]
 /// Links the square root function to make it available for JIT compilation.
 ///
 /// This function declares the external sqrt function to the Cranelift module,
@@ -23,7 +31,7 @@ use cranelift_module::{FuncId, Linkage, Module};
 /// # Returns
 /// * `Ok(FuncId)` - The function ID that can be used to call sqrt
 /// * `Err(String)` - Error message if declaration fails
-pub fn link_sqrt(module: &mut dyn Module) -> Result<FuncId, String> {
+pub fn link_sqrt(module: &mut dyn CraneliftModule) -> Result<FuncId, String> {
     // Create signature for sqrt(f64) -> f64
     let mut sig = module.make_signature();
     sig.params.push(AbiParam::new(F64));
@@ -37,6 +45,7 @@ pub fn link_sqrt(module: &mut dyn Module) -> Result<FuncId, String> {
     Ok(func_id)
 }
 
+#[cfg(feature = "cranelift-backend")]
 /// Generates Cranelift IR instructions to call the square root function.
 ///
 /// This helper function adds instructions to call the previously linked sqrt
@@ -52,11 +61,41 @@ pub fn link_sqrt(module: &mut dyn Module) -> Result<FuncId, String> {
 /// The Cranelift IR value containing the result of calling sqrt
 pub fn call_sqrt(
     builder: &mut FunctionBuilder,
-    module: &mut dyn Module,
+    module: &mut dyn CraneliftModule,
     func_id: cranelift_module::FuncId,
     arg: cranelift_codegen::ir::Value,
 ) -> cranelift_codegen::ir::Value {
     let func = module.declare_func_in_func(func_id, builder.func);
     let call = builder.ins().call(func, &[arg]);
     builder.inst_results(call)[0]
+}
+
+#[cfg(feature = "llvm-backend")]
+/// Gets or inserts the square root function in an LLVM module.
+///
+/// This function checks if the sqrt function is already declared in the module.
+/// If not, it adds a declaration. Returns the LLVM function value for the sqrt function.
+///
+/// # Arguments
+/// * `module` - The LLVM module to get or insert the function in
+///
+/// # Returns
+/// * `Ok(FunctionValue)` - The LLVM function value for the sqrt function
+/// * `Err(String)` - Error message if declaration fails
+pub fn get_or_insert_function<'ctx>(
+    module: &LLVMModule<'ctx>,
+) -> Result<FunctionValue<'ctx>, String> {
+    // Check if function already exists in module
+    if let Some(func) = module.get_function("sqrt") {
+        return Ok(func);
+    }
+
+    // Function doesn't exist, so declare it
+    let context = module.get_context();
+    let f64_type = context.f64_type();
+    let fn_type = f64_type.fn_type(&[f64_type.into()], false);
+
+    let function = module.add_function("sqrt", fn_type, None);
+
+    Ok(function)
 }
