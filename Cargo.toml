@@ -27,6 +27,7 @@ ndarray = { version = "0.16.1", optional = true }
 nalgebra = { version = "0.33.2", optional = true }
 
 [dev-dependencies]
+criterion = "0.6.0"
 fasteval = "0.2.4"
 num_cpus = "1.16.0"
 ode_solvers = "0.5.0"
@@ -46,5 +47,11 @@ ndarray = ["dep:ndarray"]
 
 [profile.release]
 opt-level = 3
-lto = true
-codegen-units = 1
+
+[[bench]]
+name = "library_comparison"
+harness = false
+
+[[bench]]
+name = "simulation_comparison"
+harness = false
