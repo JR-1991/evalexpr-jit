@@ -33,7 +33,8 @@ num_cpus = "1.16.0"
 ode_solvers = "0.5.0"
 
 [features]
-default = []
+default = ["llvm-backend"]
+llvm-backend = ["dep:inkwell"]
 cranelift-backend = [
     "dep:cranelift",
     "dep:cranelift-jit",
@@ -41,7 +42,6 @@ cranelift-backend = [
     "dep:cranelift-codegen",
     "dep:cranelift-native",
 ]
-llvm-backend = ["dep:inkwell"]
 nalgebra = ["dep:nalgebra"]
 ndarray = ["dep:ndarray"]
 
