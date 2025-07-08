@@ -105,13 +105,19 @@ impl DirectEvaluator {
     /// Evaluates: a^3 + b^2 - 2*a*b + 5
     /// Multi-variable polynomial with mixed terms
     fn evaluate_power_expr(a: f64, b: f64) -> f64 {
-        a.powf(3.0) + b.powf(2.0) - 2.0 * a * b + 5.0
+        a * a * a + b * b - 2.0 * a * b + 5.0 // More fair comparison
     }
 
     /// Evaluates: sqrt(1 - 2.2*a + π/b/3.3)
     /// Expression involving square root and division chain
     fn evaluate_sqrt_expr(a: f64, b: f64) -> f64 {
         (1.0 - 2.2 * a + PI / b / 3.3).sqrt()
+    }
+
+    /// Evaluates: (a^2/sin(2*π/b))-a/2
+    /// Expression involving sine and division chain
+    fn evaluate_sin_expr(a: f64, b: f64) -> f64 {
+        (a * a / (2.0 * PI / b).sin()) - a / 2.0
     }
 
     /// Evaluates: (a^3 + b^2*c - 2*a*b + c) / ((a+b)*(b+c)*(a+c) + 1) + sqrt(a*b*c) - sqrt((a+b+c)^3)
@@ -182,6 +188,11 @@ impl JitEvaluator {
                 .expect("Failed to create sqrt expr equation"),
         ));
 
+        let sin_expr = Box::leak(Box::new(
+            Equation::new("(a^2/sin(2*3.14159/b))-a/2".to_string())
+                .expect("Failed to create sin expr equation"),
+        ));
+
         let very_complex = Box::leak(Box::new(
             Equation::new("(a^3 + b^2*c - 2*a*b + c) / ((a+b)*(b+c)*(a+c) + 1) + sqrt(a*b*c) - sqrt((a+b+c)^3)".to_string())
                 .expect("Failed to create very complex equation"),
@@ -198,6 +209,7 @@ impl JitEvaluator {
                 nested_expr,
                 power_expr,
                 sqrt_expr,
+                sin_expr,
                 very_complex,
             ],
         }
@@ -248,6 +260,7 @@ fn benchmark_expressions(c: &mut Criterion) {
         ),
         ("power_expr", "a^3 + b^2 - 2*a*b + 5", &params_2[..]),
         ("sqrt_expr", "sqrt(1 - 2.2*a + π/b/3.3)", &params_2[..]),
+        ("sin_expr", "(a^2/sin(2*π/b))-a/2", &params_2[..]),
         (
             "very_complex",
             "Complex multi-term expression",
@@ -290,7 +303,11 @@ fn benchmark_expressions(c: &mut Criterion) {
                             black_box(params[0]),
                             black_box(params[1]),
                         ),
-                        9 => DirectEvaluator::evaluate_very_complex(
+                        9 => DirectEvaluator::evaluate_sin_expr(
+                            black_box(params[0]),
+                            black_box(params[1]),
+                        ),
+                        10 => DirectEvaluator::evaluate_very_complex(
                             black_box(params[0]),
                             black_box(params[1]),
                             black_box(params[2]),
