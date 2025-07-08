@@ -189,11 +189,9 @@ fn print_metrics(
     // Sequential metrics
     println!(
         "Sequential: {}",
-        format!(
-            "{duration_seq:?} for {n_runs} runs and {n_equations} equations"
-        )
-        .bright_yellow()
-        .italic()
+        format!("{duration_seq:?} for {n_runs} runs and {n_equations} equations")
+            .bright_yellow()
+            .italic()
     );
 
     let ns_per_eq_seq =
@@ -208,11 +206,9 @@ fn print_metrics(
     // Parallel metrics
     println!(
         "Parallel: {}",
-        format!(
-            "{duration_par:?} for {n_runs} runs and {n_equations} equations"
-        )
-        .bright_yellow()
-        .italic()
+        format!("{duration_par:?} for {n_runs} runs and {n_equations} equations")
+            .bright_yellow()
+            .italic()
     );
 
     let ns_per_eq_par =

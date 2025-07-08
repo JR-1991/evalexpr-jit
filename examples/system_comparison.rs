@@ -114,17 +114,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|expr| Equation::new(expr.clone()))
         .collect::<Result<_, _>>()?;
     let duration = start.elapsed();
-    println!(
-        "(Individual) Total compilation time: {duration:?} for {n_equations} equations"
-    );
+    println!("(Individual) Total compilation time: {duration:?} for {n_equations} equations");
 
     // Create a system that combines all equations into one optimized unit
     let start = std::time::Instant::now();
     let system = EquationSystem::new(expressions)?;
     let duration = start.elapsed();
-    println!(
-        "(System) Total compilation time: {duration:?} for {n_equations} equations\n"
-    );
+    println!("(System) Total compilation time: {duration:?} for {n_equations} equations\n");
 
     // Test input values for x, y, and z respectively
     let inputs = &[1.0, 2.0, 3.0, 4.0, 5.0]; // x, y, z, w, v
@@ -170,9 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nPerformance Analysis:");
     println!("Individual: {ns_per_eq_individual:.2}ns per equation");
     println!("System: {ns_per_eq_sequential:.2}ns per equation");
-    println!(
-        "System (parallel): {ns_per_eq_parallel:.2}ns per equation"
-    );
+    println!("System (parallel): {ns_per_eq_parallel:.2}ns per equation");
 
     Ok(())
 }

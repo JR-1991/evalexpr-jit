@@ -143,9 +143,7 @@ fn main() {
         .num_threads(num_cpus::get())
         .build_global()
     {
-        eprintln!(
-            "Thread pool initialization warning (may be already initialized): {e}"
-        );
+        eprintln!("Thread pool initialization warning (may be already initialized): {e}");
     }
 
     let system = Box::leak(Box::new(
