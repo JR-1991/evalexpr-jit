@@ -29,7 +29,6 @@ num_cpus = "1.16.0"
 ode_solvers = "0.5.0"
 
 [features]
-default = ["nalgebra", "ndarray"]
 nalgebra = ["dep:nalgebra"]
 ndarray = ["dep:ndarray"]
 
