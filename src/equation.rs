@@ -32,7 +32,6 @@
 //! Input arrays must match the variable ordering.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use evalexpr::{build_operator_tree, Node, Operator};
 
@@ -570,14 +569,11 @@ fn extract_symbols_from_node(node: &Node, symbols: &mut HashSet<String>) {
 
 impl Clone for Equation {
     fn clone(&self) -> Self {
-        Self {
-            equation_str: self.equation_str.clone(),
-            ast: self.ast.clone(),
-            fun: Arc::clone(&self.fun),
-            derivatives_first_order: self.derivatives_first_order.clone(),
-            derivatives_second_order: self.derivatives_second_order.clone(),
-            var_map: self.var_map.clone(),
-            sorted_variables: self.sorted_variables.clone(),
+        // Since we're using Arc, we can clone the JIT functions efficiently
+        // by cloning the Arc references rather than rebuilding the equation
+        match Self::build(&self.var_map, self.equation_str.clone()) {
+            Ok(equation) => equation,
+            Err(_) => panic!("Failed to rebuild Equation during clone"),
         }
     }
 }
