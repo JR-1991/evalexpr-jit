@@ -1,6 +1,6 @@
 [package]
 name = "evalexpr-jit"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 authors = ["Jan Range <jan.range@simtech.uni-stuttgart.de>"]
 description = "JIT compilation and symbolic differentiation of evalexpr expressions with Cranelift."
@@ -8,11 +8,11 @@ license = "MIT"
 repository = "https://github.com/jr-1991/evalexpr-jit"
 
 [dependencies]
-cranelift = "0.115.0"
-cranelift-jit = "0.115.0"
-cranelift-module = "0.115.0"
-cranelift-codegen = "0.115"
-cranelift-native = "0.115.0"
+cranelift = "0.121.1"
+cranelift-jit = "0.121.1"
+cranelift-module = "0.121.1"
+cranelift-codegen = "0.121.1"
+cranelift-native = "0.121.1"
 evalexpr = "12.0.2"
 thiserror = "2.0.9"
 target-lexicon = "0.13.1"
@@ -23,11 +23,13 @@ ndarray = { version = "0.16.1", optional = true }
 nalgebra = { version = "0.33.2", optional = true }
 
 [dev-dependencies]
+criterion = "0.6.0"
 fasteval = "0.2.4"
 num_cpus = "1.16.0"
 ode_solvers = "0.5.0"
 
 [features]
+default = ["nalgebra", "ndarray"]
 nalgebra = ["dep:nalgebra"]
 ndarray = ["dep:ndarray"]
 
@@ -35,3 +37,11 @@ ndarray = ["dep:ndarray"]
 opt-level = 3
 lto = true
 codegen-units = 1
+
+[[bench]]
+name = "expressions"
+harness = false
+
+[[bench]]
+name = "simulation"
+harness = false
