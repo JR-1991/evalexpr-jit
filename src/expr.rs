@@ -585,11 +585,11 @@ impl Expr {
                     (Expr::Const(c), Expr::Add(x, y)) | (Expr::Add(x, y), Expr::Const(c))
                         if c.abs() < 10.0 =>
                     {
-                        (&Expr::Add(
+                        Expr::Add(
                             Box::new(Expr::Mul(Box::new(Expr::Const(*c)), x.clone())),
                             Box::new(Expr::Mul(Box::new(Expr::Const(*c)), y.clone())),
-                        ))
-                            .simplify()
+                        )
+                        .simplify()
                     }
                     // Strength reduction: x * 2 -> x + x (only for small integers)
                     (expr, Expr::Const(2.0)) | (Expr::Const(2.0), expr) => {
@@ -817,15 +817,15 @@ impl Expr {
                     Expr::Neg(inner) => inner.clone(),
                     // Distribute negation: -(x + y) -> -x - y
                     Expr::Add(x, y) => {
-                        (&Expr::Sub(Box::new(Expr::Neg(x.clone())), y.clone())).simplify()
+                        Expr::Sub(Box::new(Expr::Neg(x.clone())), y.clone()).simplify()
                     }
                     // Distribute negation: -(x - y) -> -x + y
                     Expr::Sub(x, y) => {
-                        (&Expr::Add(Box::new(Expr::Neg(x.clone())), y.clone())).simplify()
+                        Expr::Add(Box::new(Expr::Neg(x.clone())), y.clone()).simplify()
                     }
                     // Factor out negation: -(c*x) -> (-c)*x
                     Expr::Mul(c, x) if matches!(**c, Expr::Const(_)) => {
-                        (&Expr::Mul(Box::new(Expr::Neg(c.clone())), x.clone())).simplify()
+                        Expr::Mul(Box::new(Expr::Neg(c.clone())), x.clone()).simplify()
                     }
                     _ => Box::new(Expr::Neg(e)),
                 }

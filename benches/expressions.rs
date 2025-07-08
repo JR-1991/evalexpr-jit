@@ -47,7 +47,7 @@
 //! over direct evaluation, particularly for complex mathematical expressions that
 //! are evaluated many times.
 
-use std::hint::black_box;
+use std::{f64::consts::PI, hint::black_box};
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use evalexpr_jit::Equation;
@@ -87,7 +87,7 @@ impl DirectEvaluator {
     /// Evaluates: a^2 / (2 * π / b) - a / 2.2
     /// Polynomial with division and multiple variables
     fn evaluate_polynomial(a: f64, b: f64) -> f64 {
-        a * a / (2.0 * 3.14159 / b) - a / 2.2
+        a * a / (2.0 * PI / b) - a / 2.2
     }
 
     /// Evaluates: (a^3 + 2*a^2 - 5*a + 1) / (b^2 + 3*b + 2)
@@ -111,7 +111,7 @@ impl DirectEvaluator {
     /// Evaluates: sqrt(1 - 2.2*a + π/b/3.3)
     /// Expression involving square root and division chain
     fn evaluate_sqrt_expr(a: f64, b: f64) -> f64 {
-        (1.0 - 2.2 * a + 3.14159 / b / 3.3).sqrt()
+        (1.0 - 2.2 * a + PI / b / 3.3).sqrt()
     }
 
     /// Evaluates: (a^3 + b^2*c - 2*a*b + c) / ((a+b)*(b+c)*(a+c) + 1) + sqrt(a*b*c) - sqrt((a+b+c)^3)
@@ -325,7 +325,7 @@ fn benchmark_expressions(c: &mut Criterion) {
 /// setup cost when using JIT compilation.
 fn benchmark_compilation_time(c: &mut Criterion) {
     // Expression strings to compile - same as used in evaluation benchmarks
-    let expressions = vec![
+    let expressions = [
         "a + 1.1",
         "a * 2.2",
         "2.2 * a + 1.1",
