@@ -114,19 +114,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|expr| Equation::new(expr.clone()))
         .collect::<Result<_, _>>()?;
     let duration = start.elapsed();
-    println!(
-        "(Individual) Total compilation time: {:?} for {} equations",
-        duration, n_equations
-    );
+    println!("(Individual) Total compilation time: {duration:?} for {n_equations} equations");
 
     // Create a system that combines all equations into one optimized unit
     let start = std::time::Instant::now();
     let system = EquationSystem::new(expressions)?;
     let duration = start.elapsed();
-    println!(
-        "(System) Total compilation time: {:?} for {} equations\n",
-        duration, n_equations
-    );
+    println!("(System) Total compilation time: {duration:?} for {n_equations} equations\n");
 
     // Test input values for x, y, and z respectively
     let inputs = &[1.0, 2.0, 3.0, 4.0, 5.0]; // x, y, z, w, v
@@ -159,7 +153,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start = Instant::now();
     system.eval_parallel(&batch_input).unwrap();
     let duration = start.elapsed();
-    println!("System (parallel): {:?} for {} runs", duration, n_runs);
+    println!("System (parallel): {duration:?} for {n_runs} runs");
 
     // Calculate average time per equation
     let ns_per_eq_individual =
@@ -170,12 +164,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (duration.as_secs_f64() * 1_000_000_000.0) / (n_runs as f64 * equations.len() as f64);
 
     println!("\nPerformance Analysis:");
-    println!("Individual: {:.2}ns per equation", ns_per_eq_individual);
-    println!("System: {:.2}ns per equation", ns_per_eq_sequential);
-    println!(
-        "System (parallel): {:.2}ns per equation",
-        ns_per_eq_parallel
-    );
+    println!("Individual: {ns_per_eq_individual:.2}ns per equation");
+    println!("System: {ns_per_eq_sequential:.2}ns per equation");
+    println!("System (parallel): {ns_per_eq_parallel:.2}ns per equation");
 
     Ok(())
 }
@@ -202,6 +193,6 @@ fn time_it<F: Fn()>(name: &str, f: F, n: usize) -> f64 {
         f();
     }
     let duration = start.elapsed();
-    println!("{}: Takes {:?} for {} runs", name, duration, n);
+    println!("{name}: Takes {duration:?} for {n} runs");
     duration.as_secs_f64()
 }

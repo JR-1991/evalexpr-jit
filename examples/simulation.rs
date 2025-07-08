@@ -129,6 +129,6 @@ fn main() {
             println!("Number of accepted steps: {}", stats.accepted_steps);
             println!("Number of rejected steps: {}", stats.rejected_steps);
         }
-        Err(e) => println!("An error occurred: {}", e),
+        Err(e) => println!("An error occurred: {e}"),
     }
 }

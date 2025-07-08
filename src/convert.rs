@@ -35,8 +35,8 @@ use evalexpr::{Node, Operator};
 /// - Arithmetic: +, -, *, /
 /// - Variables: x, y, etc mapped to array indices
 /// - Constants: Floating point numbers
-/// - Functions: abs(), ln(), log(), sqrt(), exp()
-/// - Exponentiation: x^n where n is an integer constant
+/// - Functions: abs(), ln(), log(), sqrt(), exp(), sin(), cos()
+/// - Exponentiation: x^n (integer), x^3.5 (float), x^y (expression)
 /// - Unary negation: -x
 ///
 /// # Example
@@ -98,8 +98,7 @@ pub fn build_ast(node: &Node, var_map: &HashMap<String, u32>) -> Result<Expr, Co
             evalexpr::Value::Float(f) => Ok(Expr::Const(*f)),
             evalexpr::Value::Int(i) => Ok(Expr::Const(*i as f64)),
             _ => Err(ConvertError::ConstOperator(format!(
-                "Expected numeric constant: {:?}",
-                value
+                "Expected numeric constant: {value:?}"
             ))),
         },
         // Variable reference - looks up the variable's index in var_map
@@ -107,8 +106,7 @@ pub fn build_ast(node: &Node, var_map: &HashMap<String, u32>) -> Result<Expr, Co
             let index = var_map
                 .get(identifier.as_str())
                 .ok_or(ConvertError::VariableNotFound(format!(
-                    "Variable not found: {:?}",
-                    identifier
+                    "Variable not found: {identifier:?}"
                 )))?;
             Ok(Expr::Var(VarRef {
                 name: identifier.to_string(),
@@ -130,9 +128,10 @@ pub fn build_ast(node: &Node, var_map: &HashMap<String, u32>) -> Result<Expr, Co
                 "log" => Ok(Expr::Ln(Box::new(build_ast(&children[0], var_map)?))),
                 "sqrt" => Ok(Expr::Sqrt(Box::new(build_ast(&children[0], var_map)?))),
                 "exp" => Ok(Expr::Exp(Box::new(build_ast(&children[0], var_map)?))),
+                "sin" => Ok(Expr::Sin(Box::new(build_ast(&children[0], var_map)?))),
+                "cos" => Ok(Expr::Cos(Box::new(build_ast(&children[0], var_map)?))),
                 _ => Err(ConvertError::UnsupportedFunction(format!(
-                    "Unsupported function: {:?}",
-                    identifier
+                    "Unsupported function: {identifier:?}"
                 ))),
             }
         }
@@ -143,13 +142,12 @@ pub fn build_ast(node: &Node, var_map: &HashMap<String, u32>) -> Result<Expr, Co
                 build_ast(&children[0], var_map)
             } else {
                 Err(ConvertError::RootNode(format!(
-                    "Expected single child for root node: {:?}",
-                    children
+                    "Expected single child for root node: {children:?}"
                 )))
             }
         }
 
-        // Exponentiation - base can be any expression but exponent must be an integer constant
+        // Exponentiation - base can be any expression, exponent can be integer, float, or expression
         Operator::Exp => {
             let children = node.children();
 
@@ -159,19 +157,36 @@ pub fn build_ast(node: &Node, var_map: &HashMap<String, u32>) -> Result<Expr, Co
 
             // Check if the second child is a constant
             if let Operator::Const { value } = children[1].operator() {
-                if let evalexpr::Value::Int(exp) = value {
-                    Ok(Expr::Pow(Box::new(build_ast(&children[0], var_map)?), *exp))
-                } else {
-                    Err(ConvertError::ExpOperator(format!(
-                        "Expected integer constant for exponent in Exp operator: {:?}",
-                        value
-                    )))
+                match value {
+                    // Integer exponent
+                    evalexpr::Value::Int(exp) => {
+                        Ok(Expr::Pow(Box::new(build_ast(&children[0], var_map)?), *exp))
+                    }
+                    // Floating point exponent
+                    evalexpr::Value::Float(exp) => {
+                        // Check if it's actually an integer disguised as a float
+                        if exp.fract().abs() < 1e-10 {
+                            Ok(Expr::Pow(
+                                Box::new(build_ast(&children[0], var_map)?),
+                                *exp as i64,
+                            ))
+                        } else {
+                            Ok(Expr::PowFloat(
+                                Box::new(build_ast(&children[0], var_map)?),
+                                *exp,
+                            ))
+                        }
+                    }
+                    _ => Err(ConvertError::ExpOperator(format!(
+                        "Expected numeric constant for exponent in Exp operator: {value:?}"
+                    ))),
                 }
             } else {
-                Err(ConvertError::ExpOperator(format!(
-                    "Expected constant for exponent in Exp operator: {:?}",
-                    children[1].operator()
-                )))
+                // Non-constant exponent - general expression exponentiation
+                Ok(Expr::PowExpr(
+                    Box::new(build_ast(&children[0], var_map)?),
+                    Box::new(build_ast(&children[1], var_map)?),
+                ))
             }
         }
         // Any other operator is unsupported
@@ -239,6 +254,16 @@ mod tests {
         let node = build_operator_tree("sqrt(z)").unwrap();
         let expr = build_ast(&node, &var_map).unwrap();
         assert!(matches!(expr, Expr::Sqrt(ref a) if matches!(**a, Expr::Var(_))));
+
+        // Test sin
+        let node = build_operator_tree("sin(x)").unwrap();
+        let expr = build_ast(&node, &var_map).unwrap();
+        assert!(matches!(expr, Expr::Sin(ref a) if matches!(**a, Expr::Var(_))));
+
+        // Test cos
+        let node = build_operator_tree("cos(y)").unwrap();
+        let expr = build_ast(&node, &var_map).unwrap();
+        assert!(matches!(expr, Expr::Cos(ref a) if matches!(**a, Expr::Var(_))));
     }
 
     #[test]
@@ -249,6 +274,18 @@ mod tests {
         let node = build_operator_tree("x^2").unwrap();
         let expr = build_ast(&node, &var_map).unwrap();
         assert!(matches!(expr, Expr::Pow(ref a, 2) if matches!(**a, Expr::Var(_))));
+
+        // Test floating point power
+        let node = build_operator_tree("x^3.5").unwrap();
+        let expr = build_ast(&node, &var_map).unwrap();
+        assert!(matches!(expr, Expr::PowFloat(ref a, 3.5) if matches!(**a, Expr::Var(_))));
+
+        // Test expression power
+        let node = build_operator_tree("x^y").unwrap();
+        let expr = build_ast(&node, &var_map).unwrap();
+        assert!(
+            matches!(expr, Expr::PowExpr(ref a, ref b) if matches!(**a, Expr::Var(_)) && matches!(**b, Expr::Var(_)))
+        );
     }
 
     #[test]
@@ -263,17 +300,15 @@ mod tests {
         ));
 
         // Test unsupported function
-        let node = build_operator_tree("sin(x)").unwrap();
+        let node = build_operator_tree("tan(x)").unwrap();
         assert!(matches!(
             build_ast(&node, &var_map),
             Err(ConvertError::UnsupportedFunction(_))
         ));
 
-        // Test non-integer exponent
+        // Test floating point exponent (should now work)
         let node = build_operator_tree("x^2.5").unwrap();
-        assert!(matches!(
-            build_ast(&node, &var_map),
-            Err(ConvertError::ExpOperator(_))
-        ));
+        let expr = build_ast(&node, &var_map).unwrap();
+        assert!(matches!(expr, Expr::PowFloat(ref a, 2.5) if matches!(**a, Expr::Var(_))));
     }
 }

@@ -100,7 +100,6 @@ use evalexpr::build_operator_tree;
 use itertools::Itertools;
 use rayon::prelude::*;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Represents a system of mathematical equations that can be evaluated together.
 pub struct EquationSystem {
@@ -421,16 +420,19 @@ impl EquationSystem {
         let chunk_size = (input_sets.len() / (num_threads * 4)).max(1);
         let n_equations = self.equations.len();
 
-        let fun = Arc::clone(&self.combined_fun);
+        // Since we're using Arc, we can efficiently clone the system for parallel processing
+        let systems: Vec<_> = (0..num_threads).map(|_| self.clone()).collect();
 
         Ok(input_sets
             .par_chunks(chunk_size)
-            .map(|chunk| {
+            .enumerate()
+            .map(|(chunk_idx, chunk)| {
+                let system = &systems[chunk_idx % systems.len()];
                 chunk
                     .iter()
                     .map(|inputs| {
                         let mut results = V::zeros(n_equations);
-                        (fun)(inputs.as_slice(), results.as_mut_slice());
+                        (system.combined_fun)(inputs.as_slice(), results.as_mut_slice());
                         results
                     })
                     .collect::<Vec<_>>()
@@ -501,7 +503,7 @@ impl EquationSystem {
     ///
     /// let jacobian = system.eval_jacobian(&[2.0, 3.0], None).unwrap();
     /// // jacobian[0] contains [12.0, 4.0]   // ∂f1/∂x, ∂f1/∂y
-    /// // jacobian[1] contains [9.0, 12.0]   // ∂f2/∂x, ∂f2/∂y
+    /// // jacobian[1] contains [9.0,  12.0]   // ∂f2/∂x, ∂f2/∂y
     /// ```
     pub fn eval_jacobian(
         &self,
@@ -720,14 +722,16 @@ impl EquationSystem {
 
 impl Clone for EquationSystem {
     fn clone(&self) -> Self {
-        Self {
-            equations: self.equations.clone(),
-            asts: self.asts.clone(),
-            variable_map: self.variable_map.clone(),
-            sorted_variables: self.sorted_variables.clone(),
-            combined_fun: Arc::clone(&self.combined_fun),
-            partial_derivatives: self.partial_derivatives.clone(),
-            output_type: self.output_type,
+        // Since we're using Arc instead of Box, we need to recreate the system
+        // This is less efficient but maintains the Arc-based internal structure
+        match Self::build(
+            self.asts.clone(),
+            self.equations.clone(),
+            self.variable_map.clone(),
+            self.output_type,
+        ) {
+            Ok(system) => system,
+            Err(_) => panic!("Failed to rebuild EquationSystem during clone"),
         }
     }
 }

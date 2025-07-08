@@ -143,10 +143,7 @@ fn main() {
         .num_threads(num_cpus::get())
         .build_global()
     {
-        eprintln!(
-            "Thread pool initialization warning (may be already initialized): {}",
-            e
-        );
+        eprintln!("Thread pool initialization warning (may be already initialized): {e}");
     }
 
     let system = Box::leak(Box::new(
@@ -154,9 +151,9 @@ fn main() {
             let mut equations = Vec::new();
             // Generate equations for all 7 reactions
             for i in 1..=7 {
-                equations.push(format!("-(vmax_{} * S) / (km_{} + S)", i, i));
-                equations.push(format!("(vmax_{} * S) / (km_{} + S)", i, i));
-                equations.push(format!("-kie_{} * P", i));
+                equations.push(format!("-(vmax_{i} * S) / (km_{i} + S)"));
+                equations.push(format!("(vmax_{i} * S) / (km_{i} + S)"));
+                equations.push(format!("-kie_{i} * P"));
             }
             equations
         })
@@ -198,7 +195,7 @@ fn main() {
     // Print only errors if they occur
     for result in results {
         if let Err(e) = result {
-            eprintln!("Error: {}", e);
+            eprintln!("Error: {e}");
         }
     }
 }
