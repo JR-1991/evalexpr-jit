@@ -342,7 +342,7 @@ fn benchmark_compilation_time(c: &mut Criterion) {
 
     for (i, expr) in expressions.iter().enumerate() {
         group.bench_with_input(
-            BenchmarkId::new("Compile", format!("expr_{}", i)),
+            BenchmarkId::new("Compile", format!("expr_{i}")),
             expr,
             |b, expr| {
                 b.iter(|| {

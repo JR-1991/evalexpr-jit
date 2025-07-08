@@ -98,8 +98,7 @@ pub fn build_ast(node: &Node, var_map: &HashMap<String, u32>) -> Result<Expr, Co
             evalexpr::Value::Float(f) => Ok(Expr::Const(*f)),
             evalexpr::Value::Int(i) => Ok(Expr::Const(*i as f64)),
             _ => Err(ConvertError::ConstOperator(format!(
-                "Expected numeric constant: {:?}",
-                value
+                "Expected numeric constant: {value:?}"
             ))),
         },
         // Variable reference - looks up the variable's index in var_map
@@ -107,8 +106,7 @@ pub fn build_ast(node: &Node, var_map: &HashMap<String, u32>) -> Result<Expr, Co
             let index = var_map
                 .get(identifier.as_str())
                 .ok_or(ConvertError::VariableNotFound(format!(
-                    "Variable not found: {:?}",
-                    identifier
+                    "Variable not found: {identifier:?}"
                 )))?;
             Ok(Expr::Var(VarRef {
                 name: identifier.to_string(),
@@ -133,8 +131,7 @@ pub fn build_ast(node: &Node, var_map: &HashMap<String, u32>) -> Result<Expr, Co
                 "sin" => Ok(Expr::Sin(Box::new(build_ast(&children[0], var_map)?))),
                 "cos" => Ok(Expr::Cos(Box::new(build_ast(&children[0], var_map)?))),
                 _ => Err(ConvertError::UnsupportedFunction(format!(
-                    "Unsupported function: {:?}",
-                    identifier
+                    "Unsupported function: {identifier:?}"
                 ))),
             }
         }
@@ -145,8 +142,7 @@ pub fn build_ast(node: &Node, var_map: &HashMap<String, u32>) -> Result<Expr, Co
                 build_ast(&children[0], var_map)
             } else {
                 Err(ConvertError::RootNode(format!(
-                    "Expected single child for root node: {:?}",
-                    children
+                    "Expected single child for root node: {children:?}"
                 )))
             }
         }
@@ -182,8 +178,7 @@ pub fn build_ast(node: &Node, var_map: &HashMap<String, u32>) -> Result<Expr, Co
                         }
                     }
                     _ => Err(ConvertError::ExpOperator(format!(
-                        "Expected numeric constant for exponent in Exp operator: {:?}",
-                        value
+                        "Expected numeric constant for exponent in Exp operator: {value:?}"
                     ))),
                 }
             } else {

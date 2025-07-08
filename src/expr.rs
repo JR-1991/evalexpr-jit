@@ -1302,23 +1302,23 @@ fn generate_optimized_power(builder: &mut FunctionBuilder, base: Value, exp: i64
 impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Expr::Const(val) => write!(f, "{}", val),
-            Expr::Var(var_ref) => write!(f, "{}", var_ref.name),
-            Expr::Add(left, right) => write!(f, "({} + {})", left, right),
-            Expr::Mul(left, right) => write!(f, "({} * {})", left, right),
-            Expr::Sub(left, right) => write!(f, "({} - {})", left, right),
-            Expr::Div(left, right) => write!(f, "({} / {})", left, right),
-            Expr::Abs(expr) => write!(f, "|{}|", expr),
-            Expr::Pow(base, exp) => write!(f, "({}^{})", base, exp),
-            Expr::PowFloat(base, exp) => write!(f, "({}^{})", base, exp),
-            Expr::PowExpr(base, exponent) => write!(f, "({}^{})", base, exponent),
-            Expr::Exp(expr) => write!(f, "exp({})", expr),
-            Expr::Ln(expr) => write!(f, "ln({})", expr),
-            Expr::Sqrt(expr) => write!(f, "sqrt({})", expr),
-            Expr::Sin(expr) => write!(f, "sin({})", expr),
-            Expr::Cos(expr) => write!(f, "cos({})", expr),
-            Expr::Neg(expr) => write!(f, "-({})", expr),
-            Expr::Cached(expr, _) => write!(f, "{}", expr),
+            Expr::Const(val) => write!(f, "{val}"),
+            Expr::Var(var_ref) => write!(f, "{{{}}}", var_ref.name),
+            Expr::Add(left, right) => write!(f, "({left} + {right})"),
+            Expr::Mul(left, right) => write!(f, "({left} * {right})"),
+            Expr::Sub(left, right) => write!(f, "({left} - {right})"),
+            Expr::Div(left, right) => write!(f, "({left} / {right})"),
+            Expr::Abs(expr) => write!(f, "|{expr}|"),
+            Expr::Pow(base, exp) => write!(f, "({base}^{exp})"),
+            Expr::PowFloat(base, exp) => write!(f, "({base}^{exp})"),
+            Expr::PowExpr(base, exponent) => write!(f, "({base}^{exponent})"),
+            Expr::Exp(expr) => write!(f, "exp({expr})"),
+            Expr::Ln(expr) => write!(f, "ln({expr})"),
+            Expr::Sqrt(expr) => write!(f, "sqrt({expr})"),
+            Expr::Sin(expr) => write!(f, "sin({expr})"),
+            Expr::Cos(expr) => write!(f, "cos({expr})"),
+            Expr::Neg(expr) => write!(f, "-({expr})"),
+            Expr::Cached(expr, _) => write!(f, "{expr}"),
         }
     }
 }
@@ -1533,24 +1533,24 @@ mod tests {
 
         // Test binary operations
         let sum = Expr::Add(var("x"), var("y"));
-        assert_eq!(format!("{}", sum), "(x + y)");
+        assert_eq!(format!("{sum}"), "(x + y)");
 
         let product = Expr::Mul(var("x"), var("y"));
-        assert_eq!(format!("{}", product), "(x * y)");
+        assert_eq!(format!("{product}"), "(x * y)");
 
         // Test special functions
         let exp = Expr::Exp(var("x"));
-        assert_eq!(format!("{}", exp), "exp(x)");
+        assert_eq!(format!("{exp}"), "exp(x)");
 
         let abs = Expr::Abs(var("x"));
-        assert_eq!(format!("{}", abs), "|x|");
+        assert_eq!(format!("{abs}"), "|x|");
 
         // Test complex expression
         let complex = Expr::Div(
             Box::new(Expr::Add(Box::new(Expr::Pow(var("x"), 2)), var("y"))),
             var("z"),
         );
-        assert_eq!(format!("{}", complex), "(((x^2) + y) / z)");
+        assert_eq!(format!("{complex}"), "(((x^2) + y) / z)");
     }
 
     #[test]

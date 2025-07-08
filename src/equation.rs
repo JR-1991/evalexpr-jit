@@ -717,12 +717,12 @@ mod tests {
         let eq = Equation::new("2*x + y^2".to_string()).unwrap();
 
         // Test Debug formatting
-        let debug_output = format!("{:?}", eq);
+        let debug_output = format!("{eq:?}");
         assert!(debug_output.contains("Equation"));
         assert!(debug_output.contains("2*x + y^2"));
 
         // Test Display formatting
-        let display_output = format!("{}", eq);
+        let display_output = format!("{eq}");
         assert!(display_output.contains("Equation"));
         assert!(display_output.contains("2*x + y^2"));
     }

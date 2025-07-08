@@ -190,8 +190,7 @@ fn print_metrics(
     println!(
         "Sequential: {}",
         format!(
-            "{:?} for {} runs and {} equations",
-            duration_seq, n_runs, n_equations
+            "{duration_seq:?} for {n_runs} runs and {n_equations} equations"
         )
         .bright_yellow()
         .italic()
@@ -201,7 +200,7 @@ fn print_metrics(
         (duration_seq.as_secs_f64() * 1_000_000_000.0) / (n_runs as f64 * n_equations as f64);
     println!(
         "Sequential Average: {}",
-        format!("{:.2}ns per equation", ns_per_eq_seq)
+        format!("{ns_per_eq_seq:.2}ns per equation")
             .bright_cyan()
             .bold()
     );
@@ -210,8 +209,7 @@ fn print_metrics(
     println!(
         "Parallel: {}",
         format!(
-            "{:?} for {} runs and {} equations",
-            duration_par, n_runs, n_equations
+            "{duration_par:?} for {n_runs} runs and {n_equations} equations"
         )
         .bright_yellow()
         .italic()
@@ -221,7 +219,7 @@ fn print_metrics(
         (duration_par.as_secs_f64() * 1_000_000_000.0) / (n_runs as f64 * n_equations as f64);
     println!(
         "Parallel Average: {}",
-        format!("{:.2}ns per equation", ns_per_eq_par)
+        format!("{ns_per_eq_par:.2}ns per equation")
             .bright_magenta()
             .bold()
     );

@@ -187,7 +187,7 @@ fn benchmark_fasteval(expressions: &[String], n_runs: usize) -> Result<(), faste
         (duration.as_secs_f64() * 1_000_000_000.0) / (n_runs as f64 * expressions.len() as f64);
     println!(
         "Average: {}",
-        format!("{:.2}ns per equation", ns_per_eq)
+        format!("{ns_per_eq:.2}ns per equation")
             .bright_cyan()
             .bold()
     );
@@ -206,7 +206,7 @@ fn benchmark_evalexpr_single(
         .collect();
     let duration_jit = start.elapsed();
     let duration_str = format!("{:.3}s", duration_jit.as_secs_f64());
-    println!("JIT Compilation: {}", duration_str);
+    println!("JIT Compilation: {duration_str}");
 
     let start = Instant::now();
     for i in 0..n_runs {
@@ -238,7 +238,7 @@ fn benchmark_evalexpr_single(
         (duration.as_secs_f64() * 1_000_000_000.0) / (n_runs as f64 * expressions.len() as f64);
     println!(
         "Single Average: {}",
-        format!("{:.2}ns per equation", ns_per_eq)
+        format!("{ns_per_eq:.2}ns per equation")
             .bright_cyan()
             .bold()
     );
@@ -317,13 +317,13 @@ fn benchmark_evalexpr_system(
 
     println!(
         "Sequential Average: {}",
-        format!("{:.2}ns per equation", ns_per_eq_system)
+        format!("{ns_per_eq_system:.2}ns per equation")
             .bright_cyan()
             .bold()
     );
     println!(
         "Parallel Average: {}",
-        format!("{:.2}ns per equation", ns_per_eq_parallel)
+        format!("{ns_per_eq_parallel:.2}ns per equation")
             .bright_magenta()
             .bold()
     );

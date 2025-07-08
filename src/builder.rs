@@ -526,7 +526,7 @@ fn generate_optimized_power(builder: &mut FunctionBuilder, base: Value, exp: i64
                     result
                 }
             } else {
-                panic!("Exponent is too large: {}", exp);
+                panic!("Exponent is too large: {exp}");
             }
         }
     }

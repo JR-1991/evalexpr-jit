@@ -194,9 +194,9 @@ fn benchmark_simulations(c: &mut Criterion) {
             let mut equations = Vec::new();
             // Generate equations for each enzyme (3 equations per enzyme)
             for i in 1..=7 {
-                equations.push(format!("-(vmax_{} * S) / (km_{} + S)", i, i)); // Negative rate
-                equations.push(format!("(vmax_{} * S) / (km_{} + S)", i, i)); // Positive rate
-                equations.push(format!("-kie_{} * P", i)); // Inhibition
+                equations.push(format!("-(vmax_{i} * S) / (km_{i} + S)")); // Negative rate
+                equations.push(format!("(vmax_{i} * S) / (km_{i} + S)")); // Positive rate
+                equations.push(format!("-kie_{i} * P")); // Inhibition
             }
             equations
         })
