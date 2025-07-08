@@ -1303,7 +1303,7 @@ impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Expr::Const(val) => write!(f, "{val}"),
-            Expr::Var(var_ref) => write!(f, "{{{}}}", var_ref.name),
+            Expr::Var(var_ref) => write!(f, "{0}", var_ref.name),
             Expr::Add(left, right) => write!(f, "({left} + {right})"),
             Expr::Mul(left, right) => write!(f, "({left} * {right})"),
             Expr::Sub(left, right) => write!(f, "({left} - {right})"),
