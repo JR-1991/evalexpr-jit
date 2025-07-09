@@ -100,6 +100,7 @@ use evalexpr::build_operator_tree;
 use itertools::Itertools;
 use rayon::prelude::*;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Represents a system of mathematical equations that can be evaluated together.
 pub struct EquationSystem {
@@ -722,16 +723,14 @@ impl EquationSystem {
 
 impl Clone for EquationSystem {
     fn clone(&self) -> Self {
-        // Since we're using Arc instead of Box, we need to recreate the system
-        // This is less efficient but maintains the Arc-based internal structure
-        match Self::build(
-            self.asts.clone(),
-            self.equations.clone(),
-            self.variable_map.clone(),
-            self.output_type,
-        ) {
-            Ok(system) => system,
-            Err(_) => panic!("Failed to rebuild EquationSystem during clone"),
+        Self {
+            equations: self.equations.clone(),
+            asts: self.asts.clone(),
+            variable_map: self.variable_map.clone(),
+            sorted_variables: self.sorted_variables.clone(),
+            combined_fun: Arc::clone(&self.combined_fun),
+            partial_derivatives: self.partial_derivatives.clone(),
+            output_type: self.output_type,
         }
     }
 }
