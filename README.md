@@ -30,7 +30,7 @@ or add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-evalexpr-jit = "0.1.2"  # Replace with actual version
+evalexpr-jit = "0.2.2"  # Replace with actual version
 ```
 
 ## Quick Start
