@@ -47,9 +47,5 @@ harness = false
 name = "simulation"
 harness = false
 
-[[bench]]
-name = "vectorized_evaluation"
-harness = false
-
 [lints.clippy]
 result_large_err = "allow"
