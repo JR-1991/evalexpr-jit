@@ -341,7 +341,7 @@ fn simd_lane_and_type() -> (u8, Type) {
     // Fallback for architectures without SIMD support
     #[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
     {
-        (1, types::F64)
+        return (1, types::F64);
     }
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -352,17 +352,17 @@ fn simd_lane_and_type() -> (u8, Type) {
 
         // Test AVX512F support (8 lanes)
         if std::is_x86_feature_detected!("avx512f") && validate_simd_support(8, types::F64X8) {
-            (8, types::F64X8)
+            return (8, types::F64X8);
         }
 
         // Test AVX support (4 lanes)
         if std::is_x86_feature_detected!("avx") && validate_simd_support(4, types::F64X4) {
-            (4, types::F64X4)
+            return (4, types::F64X4);
         }
 
         // Test SSE2 support (2 lanes)
         if std::is_x86_feature_detected!("sse2") && validate_simd_support(2, types::F64X2) {
-            (2, types::F64X2)
+            return (2, types::F64X2);
         }
 
         // Fallback to scalar for x86 without SIMD
