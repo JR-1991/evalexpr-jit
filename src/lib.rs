@@ -48,6 +48,9 @@ pub mod equation;
 pub mod errors;
 /// Expression tree representation and symbolic differentiation
 pub mod expr;
+/// Expression optimization
+pub mod opt;
+
 /// System of multiple equations
 pub mod system;
 /// Functions for linking external mathematical operations
