@@ -55,7 +55,7 @@ use cranelift::prelude::*;
 use cranelift_codegen::ir::{immediates::Offset32, Value};
 use cranelift_module::Module;
 
-use crate::{errors::EquationError, operators};
+use crate::{errors::EquationError, operators, opt};
 
 /// Represents a reference to a variable in an expression.
 ///
@@ -152,6 +152,10 @@ pub enum LinearOp {
     Sin,
     /// Cosine of stack top (argument in radians)
     Cos,
+    /// a × b + c  (fused)
+    Fma,
+    /// a × b − c  (fused)
+    Fmsub,
 }
 
 /// Flattened expression representation for efficient evaluation
@@ -166,6 +170,13 @@ pub struct FlattenedExpr {
 }
 
 impl Expr {
+    /// Returns the number of variables in the expression
+    pub fn n_vars(&self) -> u32 {
+        match self {
+            Expr::Var(_) => 1,
+            _ => 0,
+        }
+    }
     /// Pre-evaluates constants and caches variable loads for improved performance
     pub fn pre_evaluate(
         &self,
@@ -1089,202 +1100,244 @@ impl Expr {
     ///
     /// This eliminates all function call overhead by generating a single
     /// linear sequence of optimal instructions with direct register allocation.
+    /// Includes variable caching optimization to eliminate redundant memory access.
+    /// Now supports true Structure of Arrays (SoA) layout for SIMD operations.
     pub fn codegen_flattened(
         &self,
         builder: &mut FunctionBuilder,
         module: &mut dyn Module,
+        input_ptr: Value,
+        lane: u8,
+        vec_ty: Type,
+        idx_val: Value,
+        n_points: Value,
     ) -> Result<Value, EquationError> {
-        let flattened = self.flatten();
+        // ─── Constant / loop-invariant values ───────────────────────────────
+        let i32_ty = types::I32;
+        let ptr_ty = builder.func.dfg.value_type(input_ptr); // usually I64
+        let eight_i32 = builder.ins().iconst(i32_ty, 8); // literal 8 once
 
-        // Fast path for constant expressions
-        if let Some(constant) = flattened.constant_result {
-            return Ok(builder.ins().f64const(constant));
+        // points_x8 = n_points * 8  (structure-of-arrays block size in bytes)
+        let points_x8 = builder.ins().imul_imm(n_points, 8);
+
+        // ─── Fast-path: whole expression is a known constant ────────────────
+        let flattened = opt::optimize(self.flatten());
+        if let Some(c) = flattened.constant_result {
+            let lit = builder.ins().f64const(c);
+            return Ok(if lane == 1 {
+                lit
+            } else {
+                builder.ins().splat(vec_ty, lit)
+            });
         }
 
-        // Pre-allocate stack for operations (eliminates allocations)
+        // ─── Evaluation stack + per-variable cache ──────────────────────────
         let mut value_stack = Vec::with_capacity(flattened.ops.len());
+        let mut var_cache: std::collections::HashMap<u32, Value> = std::collections::HashMap::new();
 
-        // Get input pointer once
-        let input_ptr = builder
-            .func
-            .dfg
-            .block_params(builder.current_block().unwrap())[0];
-
-        // Execute linear operations with optimal code generation
+        // ─── Linear byte-code interpreter ───────────────────────────────────
         for op in &flattened.ops {
             match op {
-                LinearOp::LoadConst(val) => {
-                    value_stack.push(builder.ins().f64const(*val));
+                // -------- constants -------------------------------------------------
+                LinearOp::LoadConst(v) => {
+                    let lit = builder.ins().f64const(*v);
+                    value_stack.push(if lane == 1 {
+                        lit
+                    } else {
+                        builder.ins().splat(vec_ty, lit)
+                    });
                 }
 
-                LinearOp::LoadVar(index) => {
-                    let offset = (*index as i32) * 8;
-                    let memflags = MemFlags::new().with_aligned().with_readonly().with_notrap();
-                    let val =
-                        builder
-                            .ins()
-                            .load(types::F64, memflags, input_ptr, Offset32::new(offset));
+                // -------- variable load  -------------------------------------------
+                LinearOp::LoadVar(idx) => {
+                    let val = *var_cache.entry(*idx).or_insert_with(|| {
+                        // var_block_offset = idx * points_x8
+                        let idx_i32 = builder.ins().iconst(i32_ty, *idx as i64);
+                        let var_block_off = builder.ins().imul(idx_i32, points_x8);
+
+                        // point_offset = idx_val * 8
+                        let point_off = builder.ins().imul(idx_val, eight_i32);
+
+                        // final byte offset (still i32) & address
+                        let total_off_i32 = builder.ins().iadd(var_block_off, point_off);
+                        let total_off_ptr = builder.ins().uextend(ptr_ty, total_off_i32);
+                        let addr = builder.ins().iadd(input_ptr, total_off_ptr);
+
+                        let mem = MemFlags::new().with_aligned().with_readonly().with_notrap();
+                        if lane == 1 {
+                            builder.ins().load(types::F64, mem, addr, Offset32::new(0))
+                        } else {
+                            builder.ins().load(vec_ty, mem, addr, Offset32::new(0))
+                        }
+                    });
                     value_stack.push(val);
                 }
 
+                // -------- arithmetic -------------------------------------------------
                 LinearOp::Add => {
-                    let rhs = value_stack.pop().unwrap();
-                    let lhs = value_stack.pop().unwrap();
-                    value_stack.push(builder.ins().fadd(lhs, rhs));
+                    let r = value_stack.pop().unwrap();
+                    let l = value_stack.pop().unwrap();
+                    value_stack.push(builder.ins().fadd(l, r));
                 }
-
                 LinearOp::Sub => {
-                    let rhs = value_stack.pop().unwrap();
-                    let lhs = value_stack.pop().unwrap();
-                    value_stack.push(builder.ins().fsub(lhs, rhs));
+                    /* identical pattern */
+                    let r = value_stack.pop().unwrap();
+                    let l = value_stack.pop().unwrap();
+                    value_stack.push(builder.ins().fsub(l, r));
                 }
-
                 LinearOp::Mul => {
-                    let rhs = value_stack.pop().unwrap();
-                    let lhs = value_stack.pop().unwrap();
-                    value_stack.push(builder.ins().fmul(lhs, rhs));
+                    let r = value_stack.pop().unwrap();
+                    let l = value_stack.pop().unwrap();
+                    value_stack.push(builder.ins().fmul(l, r));
                 }
-
                 LinearOp::Div => {
-                    let rhs = value_stack.pop().unwrap();
-                    let lhs = value_stack.pop().unwrap();
-                    value_stack.push(builder.ins().fdiv(lhs, rhs));
+                    let r = value_stack.pop().unwrap();
+                    let l = value_stack.pop().unwrap();
+                    value_stack.push(builder.ins().fdiv(l, r));
                 }
-
                 LinearOp::Abs => {
-                    let val = value_stack.pop().unwrap();
-                    value_stack.push(builder.ins().fabs(val));
+                    let v = value_stack.pop().unwrap();
+                    value_stack.push(builder.ins().fabs(v));
                 }
-
                 LinearOp::Neg => {
-                    let val = value_stack.pop().unwrap();
-                    value_stack.push(builder.ins().fneg(val));
+                    let v = value_stack.pop().unwrap();
+                    value_stack.push(builder.ins().fneg(v));
                 }
 
-                LinearOp::PowConst(exp) => {
+                // -------- power / transcendental  -----------------------------------
+                LinearOp::PowConst(e) => {
                     let base = value_stack.pop().unwrap();
-                    let result = match *exp {
-                        0 => builder.ins().f64const(1.0),
-                        1 => base,
-                        2 => builder.ins().fmul(base, base),
-                        3 => {
-                            let square = builder.ins().fmul(base, base);
-                            builder.ins().fmul(square, base)
-                        }
-                        4 => {
-                            let square = builder.ins().fmul(base, base);
-                            builder.ins().fmul(square, square)
-                        }
-                        -1 => {
-                            let one = builder.ins().f64const(1.0);
-                            builder.ins().fdiv(one, base)
-                        }
-                        -2 => {
-                            let square = builder.ins().fmul(base, base);
-                            let one = builder.ins().f64const(1.0);
-                            builder.ins().fdiv(one, square)
-                        }
-                        _ => {
-                            // For other exponents, use optimized binary exponentiation
-                            generate_optimized_power(builder, base, *exp)
-                        }
+                    value_stack.push(generate_optimized_power(builder, base, *e));
+                }
+                LinearOp::PowFloat(e) => {
+                    let base = value_stack.pop().unwrap();
+                    let cst = builder.ins().f64const(*e);
+                    let expv = if lane == 1 {
+                        cst
+                    } else {
+                        builder.ins().splat(vec_ty, cst)
                     };
-                    value_stack.push(result);
-                }
 
-                LinearOp::PowFloat(exp) => {
-                    let base = value_stack.pop().unwrap();
-                    let func_id = crate::operators::pow::link_powf(module).unwrap();
-                    let exp_val = builder.ins().f64const(*exp);
-                    let result =
-                        crate::operators::pow::call_powf(builder, module, func_id, base, exp_val);
-                    value_stack.push(result);
+                    let fid = operators::pow::link_powf(module).unwrap();
+                    value_stack.push(operators::pow::call_powf(builder, module, fid, base, expv));
                 }
-
                 LinearOp::PowExpr => {
-                    let exponent = value_stack.pop().unwrap();
+                    let expv = value_stack.pop().unwrap();
                     let base = value_stack.pop().unwrap();
-                    let func_id = crate::operators::pow::link_powf(module).unwrap();
-                    let result =
-                        crate::operators::pow::call_powf(builder, module, func_id, base, exponent);
-                    value_stack.push(result);
+                    let fid = operators::pow::link_powf(module).unwrap();
+                    value_stack.push(operators::pow::call_powf(builder, module, fid, base, expv));
                 }
-
                 LinearOp::Exp => {
-                    let arg = value_stack.pop().unwrap();
-                    let func_id = operators::exp::link_exp(module).unwrap();
-                    let result = operators::exp::call_exp(builder, module, func_id, arg);
-                    value_stack.push(result);
+                    /* similar wrapper */
+                    let v = value_stack.pop().unwrap();
+                    let fid = operators::exp::link_exp(module).unwrap();
+                    value_stack.push(operators::exp::call_exp(builder, module, fid, v));
                 }
-
                 LinearOp::Ln => {
-                    let arg = value_stack.pop().unwrap();
-                    let func_id = operators::ln::link_ln(module).unwrap();
-                    let result = operators::ln::call_ln(builder, module, func_id, arg);
-                    value_stack.push(result);
+                    let v = value_stack.pop().unwrap();
+                    let fid = operators::ln::link_ln(module).unwrap();
+                    value_stack.push(operators::ln::call_ln(builder, module, fid, v));
                 }
-
                 LinearOp::Sqrt => {
-                    let arg = value_stack.pop().unwrap();
-                    let func_id = operators::sqrt::link_sqrt(module).unwrap();
-                    let result = operators::sqrt::call_sqrt(builder, module, func_id, arg);
-                    value_stack.push(result);
+                    let v = value_stack.pop().unwrap();
+                    let fid = operators::sqrt::link_sqrt(module).unwrap();
+                    value_stack.push(operators::sqrt::call_sqrt(builder, module, fid, v));
                 }
-
                 LinearOp::Sin => {
-                    let arg = value_stack.pop().unwrap();
-                    let func_id = crate::operators::trigonometric::link_sin(module).unwrap();
-                    let result =
-                        crate::operators::trigonometric::call_sin(builder, module, func_id, arg);
-                    value_stack.push(result);
+                    let v = value_stack.pop().unwrap();
+                    let fid = operators::trigonometric::link_sin(module).unwrap();
+                    value_stack.push(operators::trigonometric::call_sin(builder, module, fid, v));
                 }
-
                 LinearOp::Cos => {
-                    let arg = value_stack.pop().unwrap();
-                    let func_id = crate::operators::trigonometric::link_cos(module).unwrap();
-                    let result =
-                        crate::operators::trigonometric::call_cos(builder, module, func_id, arg);
-                    value_stack.push(result);
+                    let v = value_stack.pop().unwrap();
+                    let fid = operators::trigonometric::link_cos(module).unwrap();
+                    value_stack.push(operators::trigonometric::call_cos(builder, module, fid, v));
+                }
+                LinearOp::Fma => {
+                    let c = value_stack.pop().unwrap();
+                    let b = value_stack.pop().unwrap();
+                    let a = value_stack.pop().unwrap();
+                    value_stack.push(builder.ins().fma(a, b, c));
+                }
+                LinearOp::Fmsub => {
+                    let c = value_stack.pop().unwrap();
+                    let b = value_stack.pop().unwrap();
+                    let a = value_stack.pop().unwrap();
+                    // a*b - c  ==  fma(a, b, -c)
+                    let neg_c = builder.ins().fneg(c);
+                    value_stack.push(builder.ins().fma(a, b, neg_c));
                 }
             }
         }
 
-        // Return final result
+        // Final result – the stack must contain exactly one value.
         Ok(value_stack.pop().unwrap())
     }
 }
 
-/// Generates optimized power operation using binary exponentiation
+/// Generates optimized power operation with inlining for common exponents and binary exponentiation
 fn generate_optimized_power(builder: &mut FunctionBuilder, base: Value, exp: i64) -> Value {
-    if exp == 0 {
-        return builder.ins().f64const(1.0);
-    }
-
-    if exp == 1 {
-        return base;
-    }
-
-    let abs_exp = exp.abs();
-    let mut result = builder.ins().f64const(1.0);
-    let mut current_base = base;
-    let mut remaining = abs_exp;
-
-    // Binary exponentiation - optimal for any exponent
-    while remaining > 0 {
-        if remaining & 1 == 1 {
-            result = builder.ins().fmul(result, current_base);
+    match exp {
+        0 => builder.ins().f64const(1.0),
+        1 => base,
+        2 => builder.ins().fmul(base, base),
+        3 => {
+            let square = builder.ins().fmul(base, base);
+            builder.ins().fmul(square, base)
         }
-        if remaining > 1 {
-            current_base = builder.ins().fmul(current_base, current_base);
+        4 => {
+            let square = builder.ins().fmul(base, base);
+            builder.ins().fmul(square, square)
         }
-        remaining >>= 1;
-    }
+        5 => {
+            let square = builder.ins().fmul(base, base);
+            let fourth = builder.ins().fmul(square, square);
+            builder.ins().fmul(fourth, base)
+        }
+        6 => {
+            let square = builder.ins().fmul(base, base);
+            let cube = builder.ins().fmul(square, base);
+            builder.ins().fmul(cube, cube)
+        }
+        8 => {
+            let square = builder.ins().fmul(base, base);
+            let fourth = builder.ins().fmul(square, square);
+            builder.ins().fmul(fourth, fourth)
+        }
+        -1 => {
+            let one = builder.ins().f64const(1.0);
+            builder.ins().fdiv(one, base)
+        }
+        -2 => {
+            let square = builder.ins().fmul(base, base);
+            let one = builder.ins().f64const(1.0);
+            builder.ins().fdiv(one, square)
+        }
+        _ => {
+            // Binary exponentiation for other cases
+            let abs_exp = exp.abs();
+            let mut result = builder.ins().f64const(1.0);
+            let mut current_base = base;
+            let mut remaining = abs_exp;
 
-    if exp < 0 {
-        let one = builder.ins().f64const(1.0);
-        builder.ins().fdiv(one, result)
-    } else {
-        result
+            // Binary exponentiation - optimal for any exponent
+            while remaining > 0 {
+                if remaining & 1 == 1 {
+                    result = builder.ins().fmul(result, current_base);
+                }
+                if remaining > 1 {
+                    current_base = builder.ins().fmul(current_base, current_base);
+                }
+                remaining >>= 1;
+            }
+
+            if exp < 0 {
+                let one = builder.ins().f64const(1.0);
+                builder.ins().fdiv(one, result)
+            } else {
+                result
+            }
+        }
     }
 }
 
