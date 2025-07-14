@@ -21,6 +21,7 @@ itertools = "0.14.0"
 rayon = "1.10.0"
 ndarray = { version = "0.16.1", optional = true }
 nalgebra = { version = "0.33.2", optional = true }
+clap = { version = "4.5.41", features = ["derive"] }
 
 [dev-dependencies]
 criterion = "0.6.0"
@@ -29,6 +30,7 @@ num_cpus = "1.16.0"
 ode_solvers = "0.5.0"
 
 [features]
+default = ["nalgebra", "ndarray"]
 nalgebra = ["dep:nalgebra"]
 ndarray = ["dep:ndarray"]
 
@@ -43,6 +45,10 @@ harness = false
 
 [[bench]]
 name = "simulation"
+harness = false
+
+[[bench]]
+name = "vectorized_evaluation"
 harness = false
 
 [lints.clippy]
