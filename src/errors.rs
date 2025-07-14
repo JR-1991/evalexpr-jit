@@ -102,4 +102,7 @@ pub enum EquationError {
         got_rows: usize,
         got_cols: usize,
     },
+    /// Error when no expressions have been provided
+    #[error("No expressions have been provided.")]
+    MissingExpressions,
 }
