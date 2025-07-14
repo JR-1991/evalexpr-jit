@@ -106,11 +106,92 @@ impl Default for JITConfig {
 ///
 /// # Errors
 /// Returns a BuilderError if the host machine architecture is not supported
+/// Builder pattern for configuring ISA optimization flags.
+pub struct IsaFlagsBuilder {
+    flag_builder: settings::Builder,
+}
+
+impl IsaFlagsBuilder {
+    /// Creates a new ISA flags builder with default settings.
+    pub fn new() -> Self {
+        Self {
+            flag_builder: settings::builder(),
+        }
+    }
+
+    /// Sets the optimization level.
+    pub fn opt_level(mut self, level: &str) -> Self {
+        self.flag_builder.set("opt_level", level).unwrap();
+        self
+    }
+
+    /// Enables or disables the verifier.
+    pub fn enable_verifier(mut self, enable: bool) -> Self {
+        self.flag_builder
+            .set("enable_verifier", if enable { "true" } else { "false" })
+            .unwrap();
+        self
+    }
+
+    /// Enables or disables alias analysis.
+    pub fn enable_alias_analysis(mut self, enable: bool) -> Self {
+        self.flag_builder
+            .set(
+                "enable_alias_analysis",
+                if enable { "true" } else { "false" },
+            )
+            .unwrap();
+        self
+    }
+
+    /// Enables or disables position-independent code.
+    pub fn use_pic(mut self, enable: bool) -> Self {
+        self.flag_builder
+            .set("is_pic", if enable { "true" } else { "false" })
+            .unwrap();
+        self
+    }
+
+    /// Enables or disables probestack.
+    pub fn enable_probestack(mut self, enable: bool) -> Self {
+        self.flag_builder
+            .set("enable_probestack", if enable { "true" } else { "false" })
+            .unwrap();
+        self
+    }
+
+    /// Enables colocated libcalls.
+    pub fn use_colocated_libcalls(mut self, enable: bool) -> Self {
+        self.flag_builder
+            .set(
+                "use_colocated_libcalls",
+                if enable { "true" } else { "false" },
+            )
+            .unwrap();
+        self
+    }
+
+    /// Builds the flags.
+    pub fn build(self) -> settings::Flags {
+        settings::Flags::new(self.flag_builder)
+    }
+}
+
+impl Default for IsaFlagsBuilder {
+    fn default() -> Self {
+        Self::new()
+            .opt_level("speed_and_size")
+            .enable_verifier(false)
+            .enable_alias_analysis(true)
+            .use_colocated_libcalls(true)
+            .use_pic(false)
+    }
+}
+
 pub(crate) fn create_optimized_isa(
     config: Option<JITConfig>,
 ) -> Result<(Arc<dyn TargetIsa>, settings::Flags), BuilderError> {
     let config = config.unwrap_or_default();
-    let mut flag_builder = settings::builder();
 
     // Get target triple to detect architecture and capabilities
     let target_triple = target_lexicon::Triple::host();
@@ -119,42 +200,22 @@ pub(crate) fn create_optimized_isa(
         target_lexicon::Architecture::X86_64
     );
 
-    // Optimization flags for performance
-    flag_builder.set("opt_level", "speed_and_size").unwrap();
-    flag_builder
-        .set(
-            "enable_verifier",
-            if config.enable_verifier {
-                "true"
-            } else {
-                "false"
-            },
-        )
-        .unwrap();
-    flag_builder
-        .set(
-            "enable_alias_analysis",
-            if config.enable_alias_analysis {
-                "true"
-            } else {
-                "false"
-            },
-        )
-        .unwrap();
-    flag_builder.set("use_colocated_libcalls", "true").unwrap();
-    flag_builder
-        .set("is_pic", if config.use_pic { "true" } else { "false" })
-        .unwrap();
+    // Build flags using the builder pattern with custom config
+    let mut flags_builder = IsaFlagsBuilder::default()
+        .enable_verifier(config.enable_verifier)
+        .enable_alias_analysis(config.enable_alias_analysis)
+        .use_pic(config.use_pic);
 
     // CPU-specific optimizations
     if is_x86 && !config.enable_probestack {
-        flag_builder.set("enable_probestack", "false").unwrap();
+        flags_builder = flags_builder.enable_probestack(false);
     }
+
+    let flags = flags_builder.build();
 
     let isa_builder = cranelift_native::builder()
         .map_err(|msg| BuilderError::HostMachineNotSupported(msg.to_string()))?;
 
-    let flags = settings::Flags::new(flag_builder);
     let isa = isa_builder
         .finish(flags.clone())
         .map_err(BuilderError::CodegenError)?;
@@ -271,6 +332,8 @@ fn create_combined_signature(module: &JITModule) -> Signature {
 ///
 /// This function detects the widest SIMD instruction set available on the host
 /// and returns the appropriate lane count and Cranelift vector type.
+/// It includes validation to ensure the detected features are actually usable
+/// in the current environment (important for virtualized environments like GitHub Codespaces).
 ///
 /// # Returns
 /// A tuple of (lane_count, vector_type) for optimal SIMD operations
@@ -283,14 +346,31 @@ fn simd_lane_and_type() -> (u8, Type) {
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
-        // 512-bit vectors → 8 × f64
+        // Try to validate SIMD support by creating a test ISA
+        // This helps catch virtualization issues where CPU features are detected
+        // but not actually supported by the runtime environment
+
+        // Test AVX512F support (8 lanes)
         if std::is_x86_feature_detected!("avx512f") {
-            return (8, types::F64X8);
+            if validate_simd_support(8, types::F64X8) {
+                return (8, types::F64X8);
+            }
         }
-        // 256-bit vectors → 4 × f64
+
+        // Test AVX support (4 lanes)
         if std::is_x86_feature_detected!("avx") {
-            return (4, types::F64X4);
+            if validate_simd_support(4, types::F64X4) {
+                return (4, types::F64X4);
+            }
         }
+
+        // Test SSE2 support (2 lanes)
+        if std::is_x86_feature_detected!("sse2") {
+            if validate_simd_support(2, types::F64X2) {
+                return (2, types::F64X2);
+            }
+        }
+
         // Fallback to scalar for x86 without SIMD
         return (1, types::F64);
     }
@@ -298,8 +378,99 @@ fn simd_lane_and_type() -> (u8, Type) {
     #[cfg(target_arch = "aarch64")]
     {
         // NEON is fixed 128-bit → 2 × f64
-        (2, types::F64X2)
+        // Validate support in case of virtualization issues
+        if validate_simd_support(2, types::F64X2) {
+            (2, types::F64X2)
+        } else {
+            (1, types::F64)
+        }
     }
+}
+
+/// Validates that a specific SIMD configuration is actually supported by
+/// attempting to create a minimal test function with the given vector type.
+///
+/// This helps catch cases where CPU feature detection passes but the
+/// virtualization layer doesn't actually support the SIMD instructions.
+///
+/// # Arguments
+/// * `lanes` - Number of SIMD lanes to test
+/// * `vec_type` - Cranelift vector type to test
+///
+/// # Returns
+/// `true` if the SIMD configuration is supported, `false` otherwise
+fn validate_simd_support(lanes: u8, vec_type: Type) -> bool {
+    // Quick validation - try to create an ISA and minimal function with this vector type
+    let Ok((isa, _)) = create_optimized_isa(None) else {
+        return false;
+    };
+
+    let mut module = create_jit_module(isa);
+    let mut ctx = Context::new();
+
+    // Create a minimal test signature
+    let mut sig = module.make_signature();
+    let ptr_ty = module.target_config().pointer_type();
+    sig.params.push(AbiParam::new(ptr_ty));
+    sig.params.push(AbiParam::new(ptr_ty));
+    ctx.func.signature = sig;
+
+    // Try to build a minimal function that uses the vector type
+    let mut fb_ctx = FunctionBuilderContext::new();
+    let mut builder = FunctionBuilder::new(&mut ctx.func, &mut fb_ctx);
+
+    let entry = builder.create_block();
+    builder.append_block_params_for_function_params(entry);
+    builder.switch_to_block(entry);
+    builder.seal_block(entry);
+
+    // Test vector operations within a catch_unwind block
+    let validation_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> Result<(), Box<dyn std::error::Error>> {
+            // Try to create a constant and splat it
+            let const_val = builder.ins().f64const(1.0);
+            if lanes > 1 {
+                let _vec_val = builder.ins().splat(vec_type, const_val);
+            }
+
+            // Try to load a vector value
+            let input_ptr = builder.block_params(entry)[0];
+            let mem_flags = MemFlags::new().with_aligned().with_readonly();
+            if lanes > 1 {
+                let _loaded = builder
+                    .ins()
+                    .load(vec_type, mem_flags, input_ptr, Offset32::new(0));
+            }
+
+            builder.ins().return_(&[]);
+            builder.finalize();
+
+            Ok(())
+        },
+    ));
+
+    // If building the function failed, SIMD is not supported
+    if validation_result.is_err() || validation_result.unwrap().is_err() {
+        return false;
+    }
+
+    // Try to compile the function - this will fail if SIMD isn't actually supported
+    let compile_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> Result<(), Box<dyn std::error::Error>> {
+            let func_id = module
+                .declare_function("test", Linkage::Local, &ctx.func.signature)
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+            module
+                .define_function(func_id, &mut ctx)
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+            module
+                .finalize_definitions()
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+            Ok(())
+        },
+    ));
+
+    compile_result.is_ok() && compile_result.unwrap().is_ok()
 }
 
 // ================================================================================================
