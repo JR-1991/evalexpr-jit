@@ -23,6 +23,7 @@
 //! - Compound expressions with multiple terms
 
 use evalexpr_jit::{system::EquationSystem, Equation};
+use ndarray::{Array1, Array2};
 use rayon::prelude::*;
 use std::time::Instant;
 
@@ -41,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Define a set of mathematical expressions with varying complexity
     // Each expression uses three variables: x, y, and z
     let n_runs = 10_000;
-    let n_equations = 1000;
+    let n_equations = 5;
     let expressions: Vec<String> = (0..n_equations)
         .map(|i| match i % 10 {
             0 => format!(
@@ -123,35 +124,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("(System) Total compilation time: {duration:?} for {n_equations} equations\n");
 
     // Test input values for x, y, and z respectively
-    let inputs = &[1.0, 2.0, 3.0, 4.0, 5.0]; // x, y, z, w, v
+    let inputs = Array1::from(vec![1.0, 2.0, 3.0, 4.0, 5.0]); // x, y, z, w, v
 
     // Time individual evaluations
     let time_individual = time_it(
         "Individual equations",
         || {
             for eq in &equations {
-                eq.eval(inputs).unwrap();
+                eq.eval(&inputs).unwrap();
             }
         },
         n_runs,
     );
 
     // Time sequential system evaluation
+    let mut buffer = Array1::zeros(n_equations);
     let time_system = time_it(
         "System (sequential)",
         || {
-            system.eval(inputs).unwrap();
+            system.eval_into(&inputs, &mut buffer).unwrap();
         },
         n_runs,
     );
 
     // After the sequential system timing block, add parallel evaluation:
-    let batch_input = (0..n_runs)
-        .map(|i| vec![i as f64, i as f64, i as f64, i as f64, i as f64])
-        .collect::<Vec<_>>();
+    let batch_input: Vec<f64> = (0..5)
+        .flat_map(|_| (0..n_runs).map(move |i| i as f64))
+        .collect();
+
+    let batch_input = Array2::from_shape_vec((n_runs, 5), batch_input)?;
+    let mut batch_output = Array2::zeros((n_runs, 1));
 
     let start = Instant::now();
-    system.eval_parallel(&batch_input).unwrap();
+    system.veval_into(&batch_input, &mut batch_output).unwrap();
     let duration = start.elapsed();
     println!("System (parallel): {duration:?} for {n_runs} runs");
 
@@ -187,7 +192,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     // Code to benchmark
 /// }, 1000);
 /// ```
-fn time_it<F: Fn()>(name: &str, f: F, n: usize) -> f64 {
+fn time_it<F: FnMut()>(name: &str, mut f: F, n: usize) -> f64 {
     let start = Instant::now();
     for _ in 0..n {
         f();

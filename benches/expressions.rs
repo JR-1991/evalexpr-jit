@@ -136,6 +136,7 @@ impl DirectEvaluator {
 /// overhead from the evaluation benchmarks.
 struct JitEvaluator {
     equations: Vec<&'static Equation>,
+    buffer: Vec<f64>,
 }
 
 impl JitEvaluator {
@@ -212,6 +213,7 @@ impl JitEvaluator {
                 sin_expr,
                 very_complex,
             ],
+            buffer: vec![0.0; 1],
         }
     }
 
@@ -223,8 +225,9 @@ impl JitEvaluator {
     ///
     /// # Returns
     /// The result of evaluating the equation with the given parameters
-    fn evaluate(&self, expr_idx: usize, params: &[f64]) -> f64 {
-        self.equations[expr_idx].fun()(params)
+    fn evaluate(&mut self, expr_idx: usize, params: &[f64]) -> f64 {
+        self.equations[expr_idx].fun()(params, &mut self.buffer);
+        self.buffer[0]
     }
 }
 
@@ -234,7 +237,7 @@ impl JitEvaluator {
 /// JIT-compiled versions for various mathematical expressions. The JIT compilation
 /// overhead is excluded since equations are pre-compiled.
 fn benchmark_expressions(c: &mut Criterion) {
-    let jit_eval = JitEvaluator::new();
+    let mut jit_eval = JitEvaluator::new();
 
     // Test parameters for expressions with different arities
     let params_1 = [2.5]; // Single variable expressions
