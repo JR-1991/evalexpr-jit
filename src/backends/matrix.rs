@@ -5,6 +5,10 @@
 /// core matrix operations needed for JIT compilation, including accessing raw data
 /// and creating zero-initialized matrices.
 ///
+/// # Associated Types
+///
+/// * `Vector` - The corresponding vector type for this matrix implementation
+///
 /// # Examples
 ///
 /// ```rust
@@ -21,6 +25,9 @@
 /// assert!(std::ptr::eq(data, mat.as_slice().unwrap()));
 /// ```
 pub trait Matrix {
+    /// The corresponding vector type for this matrix implementation
+    type Vector: crate::backends::vector::Vector;
+
     /// Returns a reference to the matrix's data as a flat slice.
     ///
     /// The data is stored in row-major order, meaning elements are arranged row by row.
@@ -81,6 +88,8 @@ pub trait Matrix {
 /// ```
 #[cfg(feature = "ndarray")]
 impl Matrix for ndarray::Array2<f64> {
+    type Vector = ndarray::Array1<f64>;
+
     fn flat_slice(&self) -> &[f64] {
         self.as_slice().unwrap()
     }
@@ -117,6 +126,8 @@ impl Matrix for ndarray::Array2<f64> {
 /// ```
 #[cfg(feature = "nalgebra")]
 impl Matrix for nalgebra::DMatrix<f64> {
+    type Vector = nalgebra::DVector<f64>;
+
     fn flat_slice(&self) -> &[f64] {
         self.as_slice()
     }
