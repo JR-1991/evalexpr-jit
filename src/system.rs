@@ -89,13 +89,13 @@
 //!
 
 use crate::backends::vector::Vector;
-use crate::builder::build_combined_function;
+use crate::builder::build_combined_vector_function;
 use crate::convert::build_ast;
 use crate::equation::{extract_all_symbols, extract_symbols};
 use crate::errors::EquationError;
 use crate::expr::Expr;
 use crate::prelude::Matrix;
-use crate::types::CombinedJITFunction;
+use crate::types::{CombinedJITFunction, VectorizedCombinedJITFunction};
 use evalexpr::build_operator_tree;
 use itertools::Itertools;
 use rayon::prelude::*;
@@ -113,7 +113,7 @@ pub struct EquationSystem {
     /// Variables in sorted order for consistent input ordering
     pub sorted_variables: Vec<String>,
     /// The JIT-compiled function that evaluates all equations
-    pub combined_fun: CombinedJITFunction,
+    pub combined_fun: VectorizedCombinedJITFunction,
     /// Partial derivatives of the system - maps variable names to their derivative functions
     /// E.g. {"x": df(x, y, z)/dx, "y": df(x, y, z)/dy}
     pub partial_derivatives: HashMap<String, CombinedJITFunction>,
@@ -149,6 +149,9 @@ impl EquationSystem {
     /// let dx = system.gradient(&vec![1.0, 2.0, 3.0], "x").unwrap();
     /// ```
     pub fn new(expressions: Vec<String>) -> Result<Self, EquationError> {
+        if expressions.is_empty() {
+            return Err(EquationError::MissingExpressions);
+        }
         let sorted_variables = extract_all_symbols(&expressions);
         let variable_map: HashMap<String, u32> = sorted_variables
             .iter()
@@ -241,7 +244,7 @@ impl EquationSystem {
         output_type: OutputType,
     ) -> Result<Self, EquationError> {
         // Create combined JIT function
-        let combined_fun = build_combined_function(asts.clone(), equations.len())?;
+        let combined_fun = build_combined_vector_function(asts.clone())?;
 
         // Create derivative functions for each variable forming a Jacobian matrix
         let mut jacobian_funs = HashMap::with_capacity(variable_map.len());
@@ -257,7 +260,7 @@ impl EquationSystem {
                 .iter()
                 .map(|ast| *ast.derivative(&var))
                 .collect::<Vec<Expr>>();
-            let jacobian_fun = build_combined_function(derivative_ast, asts.len())?;
+            let jacobian_fun = build_combined_vector_function(derivative_ast)?;
             jacobian_funs.insert(var, jacobian_fun);
         }
 
@@ -338,6 +341,20 @@ impl EquationSystem {
         Ok(())
     }
 
+    /// Evaluate a batch of inputs into a pre-allocated matrix.
+    ///
+    /// # Arguments
+    /// * `inputs` - Input matrix implementing the Matrix trait
+    /// * `results` - Pre-allocated matrix to store results
+    pub fn veval_into<M: Matrix, R: Matrix>(
+        &self,
+        inputs: &M,
+        results: &mut R,
+    ) -> Result<(), EquationError> {
+        (self.combined_fun)(inputs.flat_slice(), results.flat_mut_slice());
+        Ok(())
+    }
+
     /// Evaluates all equations in the system with the given input values.
     /// Allocates a new vector for results.
     ///
@@ -349,6 +366,20 @@ impl EquationSystem {
     pub fn eval<V: Vector>(&self, inputs: &V) -> Result<V, EquationError> {
         let mut results = V::zeros(self.equations.len());
         self.eval_into(inputs, &mut results)?;
+        Ok(results)
+    }
+
+    /// Evaluate a batch of inputs into a matrix.
+    ///
+    /// # Arguments
+    /// * `inputs` - Input matrix implementing the Matrix trait
+    ///
+    /// # Returns
+    /// Matrix of results, one for each equation in the system
+    pub fn veval<M: Matrix>(&self, inputs: &M) -> Result<M, EquationError> {
+        let (rows, cols) = inputs.dims();
+        let mut results = M::zeros(rows, cols);
+        self.veval_into(inputs, &mut results)?;
         Ok(results)
     }
 
@@ -777,6 +808,37 @@ mod tests {
     }
 
     #[test]
+    fn test_veval_system_with_different_variables() -> Result<(), Box<dyn std::error::Error>> {
+        let expressions = vec![
+            "2*x + y".to_string(),   // uses x, y
+            "z^2".to_string(),       // uses only z
+            "x + y + z".to_string(), // uses all
+        ];
+
+        let system = EquationSystem::new(expressions)?;
+
+        // Check that all variables are tracked
+        assert_eq!(system.sorted_variables, &["x", "y", "z"]);
+
+        // Evaluate with values for all variables (SoA)
+        let input = Array2::from_shape_vec(
+            (3, 2),
+            vec![
+                1.0, 0.0, // x values
+                1.0, 0.0, // y values
+                1.0, 0.0, // z values
+            ],
+        )?;
+        let mut results = Array2::zeros((3, 2));
+        system.veval_into(&input, &mut results)?;
+
+        let expected = Array2::from_shape_vec((3, 2), vec![3.0, 0.0, 1.0, 0.0, 3.0, 0.0])?;
+        assert_eq!(results, expected);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_consistent_variable_ordering() -> Result<(), Box<dyn std::error::Error>> {
         let expressions = vec![
             "y + x".to_string(), // variables in different order
@@ -862,9 +924,11 @@ mod tests {
 
     #[test]
     fn test_empty_system() -> Result<(), Box<dyn std::error::Error>> {
-        let system = EquationSystem::new(vec![])?;
-        let results = system.eval(&[])?;
-        assert!(results.is_empty());
+        let result = EquationSystem::new(vec![]);
+
+        assert!(result.is_err());
+        assert!(matches!(result, Err(EquationError::MissingExpressions)));
+
         Ok(())
     }
 
@@ -993,6 +1057,115 @@ mod tests {
         assert_eq!(results[[1, 0]], 9.0); // ∂f2/∂x
         assert_eq!(results[[1, 1]], 12.0); // ∂f2/∂y
         assert_eq!(results[[1, 2]], -2.0); // ∂f2/∂z
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_jacobian_enzymatic_kinetics() -> Result<(), Box<dyn std::error::Error>> {
+        let system = EquationSystem::new(vec![
+            "-kcat * x2 * x1 / (Km + x1)".to_string(), // f1: Michaelis-Menten kinetics
+            "-kie * x2".to_string(),                   // f2: First-order degradation
+        ])?;
+
+        // Test with all variables: x1, x2, kcat, Km, kie
+        let jacobian_fn = system.jacobian_wrt(&["x1", "x2", "kcat", "Km", "kie"])?;
+        let mut results = Array2::zeros((2, 5));
+
+        // Test values: Km=100.0, kcat=7.0, kie=2.0, x1=10.0, x2=5.0
+        // Variable ordering is ["Km", "kcat", "kie", "x1", "x2"], so input is [Km, kcat, kie, x1, x2]
+        let test_values = vec![100.0, 7.0, 2.0, 10.0, 5.0];
+        jacobian_fn
+            .eval_into_matrix(&test_values, &mut results)
+            .unwrap();
+
+        // Extract test values for easier reference
+        let km = 100.0f64;
+        let kcat = 7.0f64;
+        let kie = 2.0f64;
+        let x1 = 10.0f64;
+        let x2 = 5.0f64;
+
+        // Compute expected derivatives directly in Rust
+        // For f1 = -kcat * x2 * x1 / (Km + x1):
+        let expected_df1_dx1 = -kcat * x2 * km / (km + x1).powi(2);
+        let expected_df1_dx2 = -kcat * x1 / (km + x1);
+        let expected_df1_dkcat = -x2 * x1 / (km + x1);
+        let expected_df1_d_km = kcat * x2 * x1 / (km + x1).powi(2);
+        let expected_df1_dkie = 0.0f64;
+
+        // For f2 = -kie * x2:
+        let expected_df2_dx1 = 0.0f64;
+        let expected_df2_dx2 = -kie;
+        let expected_df2_dkcat = 0.0f64;
+        let expected_df2_d_km = 0.0f64;
+        let expected_df2_dkie = -x2;
+
+        let eps = 1e-10;
+
+        // Test derivatives of f1
+        assert!(
+            (results[[0, 0]] - expected_df1_dx1).abs() < eps,
+            "∂f1/∂x1: got {}, expected {}",
+            results[[0, 0]],
+            expected_df1_dx1
+        );
+        assert!(
+            (results[[0, 1]] - expected_df1_dx2).abs() < eps,
+            "∂f1/∂x2: got {}, expected {}",
+            results[[0, 1]],
+            expected_df1_dx2
+        );
+        assert!(
+            (results[[0, 2]] - expected_df1_dkcat).abs() < eps,
+            "∂f1/∂kcat: got {}, expected {}",
+            results[[0, 2]],
+            expected_df1_dkcat
+        );
+        assert!(
+            (results[[0, 3]] - expected_df1_d_km).abs() < eps,
+            "∂f1/∂Km: got {}, expected {}",
+            results[[0, 3]],
+            expected_df1_d_km
+        );
+        assert!(
+            (results[[0, 4]] - expected_df1_dkie).abs() < eps,
+            "∂f1/∂kie: got {}, expected {}",
+            results[[0, 4]],
+            expected_df1_dkie
+        );
+
+        // Test derivatives of f2
+        assert!(
+            (results[[1, 0]] - expected_df2_dx1).abs() < eps,
+            "∂f2/∂x1: got {}, expected {}",
+            results[[1, 0]],
+            expected_df2_dx1
+        );
+        assert!(
+            (results[[1, 1]] - expected_df2_dx2).abs() < eps,
+            "∂f2/∂x2: got {}, expected {}",
+            results[[1, 1]],
+            expected_df2_dx2
+        );
+        assert!(
+            (results[[1, 2]] - expected_df2_dkcat).abs() < eps,
+            "∂f2/∂kcat: got {}, expected {}",
+            results[[1, 2]],
+            expected_df2_dkcat
+        );
+        assert!(
+            (results[[1, 3]] - expected_df2_d_km).abs() < eps,
+            "∂f2/∂Km: got {}, expected {}",
+            results[[1, 3]],
+            expected_df2_d_km
+        );
+        assert!(
+            (results[[1, 4]] - expected_df2_dkie).abs() < eps,
+            "∂f2/∂kie: got {}, expected {}",
+            results[[1, 4]],
+            expected_df2_dkie
+        );
 
         Ok(())
     }

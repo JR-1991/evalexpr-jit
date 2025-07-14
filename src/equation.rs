@@ -37,12 +37,13 @@ use std::sync::Arc;
 use evalexpr::{build_operator_tree, Node, Operator};
 
 use crate::backends::vector::Vector;
-use crate::builder::build_function;
+use crate::builder::build_vector_function;
 use crate::convert::build_ast;
 use crate::errors::EquationError;
 use crate::expr::Expr;
+use crate::prelude::Matrix;
 use crate::system::OutputType;
-use crate::types::JITFunction;
+use crate::types::VectorizedJITFunction;
 use crate::EquationSystem;
 use colored::Colorize;
 use itertools::Itertools;
@@ -66,9 +67,9 @@ use itertools::Itertools;
 pub struct Equation {
     equation_str: String,
     ast: Box<Expr>,
-    fun: JITFunction,
-    derivatives_first_order: HashMap<String, JITFunction>,
-    derivatives_second_order: Vec<Vec<JITFunction>>,
+    fun: VectorizedJITFunction,
+    derivatives_first_order: HashMap<String, VectorizedJITFunction>,
+    derivatives_second_order: Vec<Vec<VectorizedJITFunction>>,
     var_map: HashMap<String, u32>,
     sorted_variables: Vec<String>,
 }
@@ -219,13 +220,13 @@ impl Equation {
         // Build the Expr AST
         let ast = build_ast(&node, variables)?;
         let ast = *ast.simplify();
-        let fun = build_function(ast.clone())?;
+        let fun = build_vector_function(ast.clone())?;
 
         // Derive the first order partial derivatives
         let mut derivatives_first_order = HashMap::new();
         for variable in sorted_variables.iter() {
             let derivative = ast.derivative(variable);
-            let derivative_func = build_function(*derivative)?;
+            let derivative_func = build_vector_function(*derivative)?;
             derivatives_first_order.insert(variable.clone(), derivative_func);
         }
 
@@ -235,7 +236,7 @@ impl Equation {
             let mut derivatives_second_order_row = Vec::new();
             for variable2 in sorted_variables.iter() {
                 let derivative = ast.derivative(variable).derivative(variable2);
-                let derivative_func = build_function(*derivative)?;
+                let derivative_func = build_vector_function(*derivative)?;
                 derivatives_second_order_row.push(derivative_func);
             }
             derivatives_second_order.push(derivatives_second_order_row);
@@ -273,7 +274,69 @@ impl Equation {
     /// the number of variables.
     pub fn eval<V: Vector>(&self, values: &V) -> Result<f64, EquationError> {
         self.validate_input_length(values.as_slice())?;
-        Ok((self.fun)(values.as_slice()))
+        let mut result = [0.0];
+        (self.fun)(values.as_slice(), &mut result);
+        Ok(result[0])
+    }
+
+    /// Evaluates the equation for vectorized input using Structure of Arrays (SoA) layout.
+    ///
+    /// This method expects input data in Structure of Arrays (SoA) format for optimal SIMD performance.
+    /// The input should be organized as: [x0,x1,x2,..., y0,y1,y2,..., z0,z1,z2,...]
+    ///
+    /// # Arguments
+    /// * `values` - Matrix with SoA layout: variables are stored in contiguous blocks
+    ///
+    /// # Returns
+    /// * `Result<M::Vector, EquationError>` - Vector of results for each point
+    ///
+    /// # SoA Layout Expected
+    /// For variables [x,y,z] and points [0,1,2,...]:
+    /// Input: [x0,x1,x2,..., y0,y1,y2,..., z0,z1,z2,...]
+    pub fn veval<M: Matrix>(&self, values: &M) -> Result<M::Vector, EquationError> {
+        let (n_points, _n_vars) = values.dims();
+
+        // Prepare result vector
+        let mut result = M::Vector::zeros(n_points);
+
+        // Call vectorized function with SoA data
+        (self.fun)(values.flat_slice(), result.as_mut_slice());
+
+        Ok(result)
+    }
+
+    /// Evaluates the equation for vectorized input using Structure of Arrays (SoA) layout.
+    ///
+    /// This method expects input data in Structure of Arrays (SoA) format for optimal SIMD performance.
+    /// The input should be organized as: [x0,x1,x2,..., y0,y1,y2,..., z0,z1,z2,...]
+    ///
+    /// # Arguments
+    /// * `values` - Matrix with SoA layout: variables are stored in contiguous blocks
+    /// * `result` - Vector to store the results
+    ///
+    /// # Example
+    /// ```
+    /// # use evalexpr_jit::Equation;
+    /// # use ndarray::{Array1, Array2};
+    /// let eq = Equation::new("x + y".to_string()).unwrap();
+    /// let mut result = Array1::zeros(2);
+    /// // SoA layout: [x0,x1,x2,..., y0,y1,y2,..., z0,z1,z2,...]
+    /// let input = Array2::from_shape_vec(
+    ///     (2, 2),
+    ///     vec![
+    ///         1.0, 2.0,
+    ///         3.0, 4.0,
+    ///     ]
+    /// ).unwrap();
+    /// eq.veval_into(&input, &mut result);
+    /// assert_eq!(result, Array1::from_vec(vec![4.0, 6.0]));
+    /// ```
+    ///
+    /// # Errors
+    /// Returns `EquationError::InvalidInputLength` if the length of values doesn't match
+    /// the number of variables.
+    pub fn veval_into<M: Matrix>(&self, values: &M, result: &mut M::Vector) {
+        (self.fun)(values.flat_slice(), result.as_mut_slice());
     }
 
     /// Computes the gradient (all first order partial derivatives) at the given point.
@@ -297,11 +360,13 @@ impl Equation {
     /// the number of variables.
     pub fn gradient(&self, values: &[f64]) -> Result<Vec<f64>, EquationError> {
         self.validate_input_length(values)?;
-        Ok(self
-            .sorted_variables
-            .iter()
-            .map(|variable| (self.derivatives_first_order[variable])(values))
-            .collect())
+        let mut result = Vec::with_capacity(self.sorted_variables.len());
+        for variable in self.sorted_variables.iter() {
+            let mut result_variable = [0.0];
+            (self.derivatives_first_order[variable])(values, &mut result_variable);
+            result.push(result_variable[0]);
+        }
+        Ok(result)
     }
 
     /// Computes the Hessian matrix (all second order partial derivatives) at the given point.
@@ -327,11 +392,17 @@ impl Equation {
     /// the number of variables.
     pub fn hessian(&self, values: &[f64]) -> Result<Vec<Vec<f64>>, EquationError> {
         self.validate_input_length(values)?;
-        Ok(self
-            .derivatives_second_order
-            .iter()
-            .map(|row| row.iter().map(|func| func(values)).collect())
-            .collect())
+        let mut result = Vec::with_capacity(self.sorted_variables.len());
+        for row in self.derivatives_second_order.iter() {
+            let mut result_row = Vec::with_capacity(self.sorted_variables.len());
+            for func in row.iter() {
+                let mut result_variable = [0.0];
+                func(values, &mut result_variable);
+                result_row.push(result_variable[0]);
+            }
+            result.push(result_row);
+        }
+        Ok(result)
     }
 
     /// Returns the derivative function for a specific variable.
@@ -352,13 +423,14 @@ impl Equation {
     /// let eq = Equation::new("2*x + y^2".to_string()).unwrap();
     /// let dx = eq.derivative("x").unwrap();
     /// let values = vec![1.0, 2.0];
-    /// let result = dx(&values); // evaluate ∂/∂x at (1,2)
-    /// assert_eq!(result, 2.0);
+    /// let mut result = [0.0];
+    /// dx(&values, &mut result); // evaluate ∂/∂x at (1,2)
+    /// assert_eq!(result[0], 2.0);
     /// ```
     ///
     /// # Errors
     /// Returns `EquationError::DerivativeNotFound` if the variable is not found.
-    pub fn derivative(&self, variable: &str) -> Result<&JITFunction, EquationError> {
+    pub fn derivative(&self, variable: &str) -> Result<&VectorizedJITFunction, EquationError> {
         self.derivatives_first_order
             .get(variable)
             .ok_or(EquationError::DerivativeNotFound(variable.to_string()))
@@ -382,13 +454,14 @@ impl Equation {
     /// let eq = Equation::new("x^2 * y^2".to_string()).unwrap();
     /// let dxdy = eq.derive_wrt(&["x", "y"]).unwrap();
     /// let values = vec![2.0, 3.0];
-    /// let result = dxdy(&values); // evaluate ∂²/∂x∂y at (2,3)
-    /// assert_eq!(result, 24.0); // ∂²/∂x∂y(x^2 * y^2) = 4xy
+    /// let mut result = [0.0];
+    /// dxdy(&values, &mut result); // evaluate ∂²/∂x∂y at (2,3)
+    /// assert_eq!(result[0], 24.0); // ∂²/∂x∂y(x^2 * y^2) = 4xy
     /// ```
     ///
     /// # Errors
     /// Returns `EquationError::DerivativeNotFound` if any variable is not found.
-    pub fn derive_wrt(&self, variables: &[&str]) -> Result<JITFunction, EquationError> {
+    pub fn derive_wrt(&self, variables: &[&str]) -> Result<VectorizedJITFunction, EquationError> {
         // Check if the variables are in the equation
         let mut non_defined_variables = HashSet::new();
         for variable in variables.iter() {
@@ -410,7 +483,7 @@ impl Equation {
         for variable in variables {
             expr = expr.derivative(variable);
         }
-        let fun = build_function(*expr)?;
+        let fun = build_vector_function(*expr)?;
         Ok(fun)
     }
 
@@ -463,7 +536,7 @@ impl Equation {
     }
 
     /// Returns the compiled evaluation function.
-    pub fn fun(&self) -> &JITFunction {
+    pub fn fun(&self) -> &VectorizedJITFunction {
         &self.fun
     }
 
@@ -584,6 +657,8 @@ impl Clone for Equation {
 
 #[cfg(test)]
 mod tests {
+    use ndarray::{Array1, Array2};
+
     use super::*;
 
     #[test]
@@ -591,6 +666,42 @@ mod tests {
         let eq = Equation::new("2*x + y^2".to_string()).unwrap();
         let result = eq.eval(&[1.0, 2.0]).unwrap();
         assert_eq!(result, 6.0);
+    }
+
+    #[test]
+    fn test_veval_single() {
+        let eq = Equation::new("2*x + x^2 + 2*x^3 / (x + 1) + 3*x^4".to_string()).unwrap();
+        let n_inputs = 1e6 as usize;
+        let input_data: Vec<f64> = (0..n_inputs).map(|i| (i as f64) * 0.1).collect();
+        let input = Array2::from_shape_vec((n_inputs, 1), input_data).unwrap();
+
+        let expected = Array1::from_vec(
+            (0..n_inputs)
+                .map(|i| {
+                    let x = (i as f64) * 0.1;
+                    2.0 * x + x.powi(2) + 2.0 * x.powi(3) / (x + 1.0) + 3.0 * x.powi(4)
+                })
+                .collect(),
+        );
+
+        let result = eq.veval(&input).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_veval_single_into() {
+        let eq = Equation::new("x + y".to_string()).unwrap();
+        let input = Array2::from_shape_vec(
+            (4, 2),
+            vec![
+                1.0, 3.0, 10.0, 12.0, // X values (SoA layout)
+                2.0, 4.0, 11.0, 13.0, // Y values (SoA layout)
+            ],
+        )
+        .unwrap();
+        let mut result = Array1::zeros(4);
+        eq.veval_into(&input, &mut result);
+        assert_eq!(result, Array1::from_vec(vec![3.0, 7.0, 21.0, 25.0]));
     }
 
     #[test]
@@ -612,8 +723,9 @@ mod tests {
         let eq = Equation::new("2*x + y^2".to_string()).unwrap();
         let derivative = eq.derivative("x").unwrap();
         let values = vec![1.0, 2.0];
-        let result = derivative(&values);
-        assert_eq!(result, 2.0);
+        let mut result = [0.0];
+        derivative(&values, &mut result);
+        assert_eq!(result[0], 2.0);
     }
 
     #[test]
@@ -621,8 +733,9 @@ mod tests {
         let eq = Equation::new("x^2 * y^2".to_string()).unwrap();
         let dxdy = eq.derive_wrt(&["x", "y"]).unwrap();
         let values = vec![2.0, 3.0];
-        let result = dxdy(&values);
-        assert_eq!(result, 24.0);
+        let mut result = [0.0];
+        dxdy(&values, &mut result);
+        assert_eq!(result[0], 24.0);
     }
 
     #[test]
