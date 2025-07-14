@@ -18,10 +18,10 @@ fn main() {
     match generate_clif_ir(&args.expression) {
         Ok(clif_ir) => {
             println!("CLIF IR for expression '{}':", args.expression);
-            println!("{}", clif_ir);
+            println!("{clif_ir}");
         }
         Err(e) => {
-            eprintln!("Error: {}", e);
+            eprintln!("Error: {e}");
             process::exit(1);
         }
     }

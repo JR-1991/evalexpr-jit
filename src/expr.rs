@@ -1102,6 +1102,7 @@ impl Expr {
     /// linear sequence of optimal instructions with direct register allocation.
     /// Includes variable caching optimization to eliminate redundant memory access.
     /// Now supports true Structure of Arrays (SoA) layout for SIMD operations.
+    #[allow(clippy::too_many_arguments)]
     pub fn codegen_flattened(
         &self,
         builder: &mut FunctionBuilder,

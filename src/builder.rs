@@ -298,7 +298,7 @@ fn simd_lane_and_type() -> (u8, Type) {
     #[cfg(target_arch = "aarch64")]
     {
         // NEON is fixed 128-bit → 2 × f64
-        return (2, types::F64X2);
+        (2, types::F64X2)
     }
 }
 
