@@ -453,7 +453,10 @@ impl Expr {
                 Box::new(Expr::Mul(
                     Box::new(Expr::Div(
                         Box::new(Expr::Const(1.0)),
-                        Box::new(Expr::Sqrt(expr.clone())),
+                        Box::new(Expr::Mul(
+                            Box::new(Expr::Const(2.0)),
+                            Box::new(Expr::Sqrt(expr.clone())),
+                        )),
                     )),
                     expr.derivative(with_respect_to),
                 ))
